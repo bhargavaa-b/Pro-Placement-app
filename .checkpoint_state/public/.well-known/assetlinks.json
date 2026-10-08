@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.threelionventures.proplacement",
+      "sha256_cert_fingerprints": [
+        "3L:10:4E:89:0B:25:45:D4:AF:37:99:88:77:66:55:44:33:22:11:00:AA:BB:CC:DD:EE:FF:01:23:45:67:89:AB"
+      ]
+    }
+  }
+]

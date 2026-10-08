@@ -1,0 +1,2504 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Mic,
+  MicOff,
+  Volume2,
+  Award,
+  AlertCircle,
+  CheckCircle2,
+  RotateCcw,
+  Clock,
+  UserCheck,
+  Square,
+} from 'lucide-react';
+import { VoiceAccent, AccentConfig } from '../types';
+
+export type VoiceGender = 'Male' | 'Female';
+
+export const GLOBAL_ACCENTS: AccentConfig[] = [
+  {
+    id: 'Indian',
+    name: 'Indian Voice Coach',
+    label: 'Indian Accent (Default)',
+    flag: '🇮🇳',
+    interviewerName: 'Voice Coach',
+    roleTitle: '',
+    langCode: 'en-IN',
+    pitch: 1.0,
+    rate: 1.0,
+  },
+  {
+    id: 'US',
+    name: 'US Voice Coach',
+    label: 'US Accent',
+    flag: '🇺🇸',
+    interviewerName: 'Voice Coach',
+    roleTitle: '',
+    langCode: 'en-US',
+    pitch: 1.0,
+    rate: 1.0,
+  },
+  {
+    id: 'UK',
+    name: 'UK Voice Coach',
+    label: 'UK Accent',
+    flag: '🇬🇧',
+    interviewerName: 'Voice Coach',
+    roleTitle: '',
+    langCode: 'en-GB',
+    pitch: 1.0,
+    rate: 0.98,
+  },
+  {
+    id: 'Australian',
+    name: 'Australian Voice Coach',
+    label: 'Australian Accent',
+    flag: '🇦🇺',
+    interviewerName: 'Voice Coach',
+    roleTitle: '',
+    langCode: 'en-AU',
+    pitch: 1.0,
+    rate: 0.98,
+  },
+  {
+    id: 'Canadian',
+    name: 'Canadian Voice Coach',
+    label: 'Canadian Accent',
+    flag: '🇨🇦',
+    interviewerName: 'Voice Coach',
+    roleTitle: '',
+    langCode: 'en-CA',
+    pitch: 1.0,
+    rate: 1.0,
+  },
+];
+
+const DEFAULT_MODE_TITLE = '';
+const PAUSE_AUTO_SEND_MS = 1300; // Fast 1.3s silence auto-send
+const VOICE_RMS_THRESHOLD = 0.032; // Strict silence gate so room noise stays a flat line
+
+interface CritiqueResult {
+  rating: number;
+  fluencyScore: number;
+  grammarScore: number;
+  vocabularyScore: number;
+  clarityScore: number;
+  confidenceScore: number;
+  spokenReply: string;
+  sectionToImprove: string;
+  fluencyCritique: string;
+  grammarCritique: string;
+  vocabularyCritique: string;
+  refinedVersion: string;
+}
+
+interface UserLanguageAnalytics {
+  totalWordsSpoken: number;
+  uniqueWordsCount: number;
+  totalSentences: number;
+  avgWordsPerSentence: number;
+  turnsCount: number;
+  lexicalDiversityPct: number;
+  pronunciationClarityPct: number;
+  confidencePacingPct: number;
+  paceLabel: string;
+  allUserWords: string[];
+  lastAnalyzedText: string;
+}
+
+// Module-level session store: persists across Stop and tab switches until the user refreshes the browser
+const SESSION_VOICE_STORE: {
+  dialogueLog: { speaker: 'COACH' | 'YOU'; text: string }[];
+  critique: CritiqueResult | null;
+  speakingTime: number;
+  wpm: number;
+  fillerWordsCount: number;
+  detectedFillers: string[];
+  currentCoachPrompt: string;
+  analytics: UserLanguageAnalytics;
+} = {
+  dialogueLog: [],
+  critique: null,
+  speakingTime: 0,
+  wpm: 0,
+  fillerWordsCount: 0,
+  detectedFillers: [],
+  currentCoachPrompt: '',
+  analytics: {
+    totalWordsSpoken: 0,
+    uniqueWordsCount: 0,
+    totalSentences: 0,
+    avgWordsPerSentence: 0,
+    turnsCount: 0,
+    lexicalDiversityPct: 0,
+    pronunciationClarityPct: 0,
+    confidencePacingPct: 0,
+    paceLabel: 'Optimal',
+    allUserWords: [],
+    lastAnalyzedText: '',
+  },
+};
+
+const FEMALE_VOICE_HINTS = [
+  'female',
+  'heera',
+  'veena',
+  'lekha',
+  'neerja',
+  'swara',
+  'aditi',
+  'raveena',
+  'priya',
+  'samantha',
+  'victoria',
+  'zira',
+  'aria',
+  'jenny',
+  'sonia',
+  'hazel',
+  'libby',
+  'karen',
+  'catherine',
+  'linda',
+  'moira',
+  'tessa',
+  'allison',
+  'ava',
+  'susan',
+];
+
+const MALE_VOICE_HINTS = [
+  'male',
+  'ravi',
+  'prabhat',
+  'madhur',
+  'rishi',
+  'hemant',
+  'daniel',
+  'david',
+  'mark',
+  'guy',
+  'george',
+  'ryan',
+  'james',
+  'richard',
+  'aaron',
+  'alex',
+  'fred',
+  'oliver',
+  'thomas',
+  'liam',
+];
+
+export const VoiceCoach: React.FC<{
+  onSessionComplete?: () => void;
+}> = ({ onSessionComplete }) => {
+  const [selectedAccent, setSelectedAccent] = useState<VoiceAccent>('Indian');
+  const [voiceGender, setVoiceGender] = useState<VoiceGender>('Female');
+  const [voiceSpeed, setVoiceSpeed] = useState<number>(1.75);
+  const [currentCoachPrompt, setCurrentCoachPrompt] = useState<string>(
+    SESSION_VOICE_STORE.currentCoachPrompt
+  );
+
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [autoResumeAfterReply, setAutoResumeAfterReply] = useState(true);
+  const [voiceDetectedActive, setVoiceDetectedActive] = useState(false);
+  const [livePreviewWords, setLivePreviewWords] = useState('');
+  const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
+
+  // Silence Auto-Send Countdown State
+  const [silenceElapsedMs, setSilenceElapsedMs] = useState(0);
+
+  // Live Speech Analytics (Initialized from persistent session store until page refresh)
+  const [speakingTime, setSpeakingTime] = useState<number>(
+    SESSION_VOICE_STORE.speakingTime
+  );
+  const [wpm, setWpm] = useState<number>(SESSION_VOICE_STORE.wpm);
+  const [fillerWordsCount, setFillerWordsCount] = useState<number>(
+    SESSION_VOICE_STORE.fillerWordsCount
+  );
+  const [detectedFillers, setDetectedFillers] = useState<string[]>(
+    SESSION_VOICE_STORE.detectedFillers
+  );
+  const [languageAnalytics, setLanguageAnalytics] =
+    useState<UserLanguageAnalytics>(SESSION_VOICE_STORE.analytics);
+
+  // Interactive Two-Way Conversation Log
+  const [dialogueLog, setDialogueLog] = useState<
+    { speaker: 'COACH' | 'YOU'; text: string }[]
+  >(SESSION_VOICE_STORE.dialogueLog);
+
+  // Detailed Fluency & Language Critique State
+  const [critique, setCritique] = useState<CritiqueResult | null>(
+    SESSION_VOICE_STORE.critique
+  );
+
+  // Synchronous Refs
+  const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const neuralAudioRef = useRef<HTMLAudioElement | null>(null);
+  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const autoResumeTimerRef = useRef< any >(null);
+  const recRestartTimerRef = useRef< any >(null);
+  const userManuallyStoppedRef = useRef<boolean>(false);
+
+  const isListeningRef = useRef<boolean>(false);
+  const isSpeakingRef = useRef<boolean>(false);
+  const isAnalyzingRef = useRef<boolean>(false);
+  const isTranscribingRef = useRef<boolean>(false);
+  const hasRecordedVoiceRef = useRef<boolean>(false);
+  const voiceFrameCountRef = useRef<number>(0);
+  const micStartedAtRef = useRef<number>(0);
+  const finalTranscriptRef = useRef<string>('');
+  const interimTranscriptRef = useRef<string>('');
+  const lastSpeechActivityRef = useRef<number>(0);
+  const speechEventBoostRef = useRef<number>(0);
+
+  const dialogueLogRef = useRef<{ speaker: 'COACH' | 'YOU'; text: string }[]>(
+    dialogueLog
+  );
+  const currentCoachPromptRef = useRef<string>(currentCoachPrompt);
+  const selectedAccentRef = useRef<VoiceAccent>(selectedAccent);
+  const voiceGenderRef = useRef<VoiceGender>(voiceGender);
+  const voiceSpeedRef = useRef<number>(voiceSpeed);
+  const autoResumeRef = useRef<boolean>(autoResumeAfterReply);
+
+  const timerRef = useRef<any>(null);
+  const waveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    dialogueLogRef.current = dialogueLog;
+    SESSION_VOICE_STORE.dialogueLog = dialogueLog;
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [dialogueLog, livePreviewWords, isAnalyzing, isTranscribingAudio]);
+
+  useEffect(() => {
+    currentCoachPromptRef.current = currentCoachPrompt;
+    SESSION_VOICE_STORE.currentCoachPrompt = currentCoachPrompt;
+  }, [currentCoachPrompt]);
+
+  useEffect(() => {
+    SESSION_VOICE_STORE.critique = critique;
+  }, [critique]);
+
+  useEffect(() => {
+    SESSION_VOICE_STORE.speakingTime = speakingTime;
+    SESSION_VOICE_STORE.wpm = wpm;
+    SESSION_VOICE_STORE.fillerWordsCount = fillerWordsCount;
+    SESSION_VOICE_STORE.detectedFillers = detectedFillers;
+    SESSION_VOICE_STORE.analytics = languageAnalytics;
+  }, [
+    speakingTime,
+    wpm,
+    fillerWordsCount,
+    detectedFillers,
+    languageAnalytics,
+  ]);
+
+  useEffect(() => {
+    selectedAccentRef.current = selectedAccent;
+  }, [selectedAccent]);
+
+  useEffect(() => {
+    voiceGenderRef.current = voiceGender;
+  }, [voiceGender]);
+
+  useEffect(() => {
+    voiceSpeedRef.current = voiceSpeed;
+  }, [voiceSpeed]);
+
+  useEffect(() => {
+    autoResumeRef.current = autoResumeAfterReply;
+  }, [autoResumeAfterReply]);
+
+  useEffect(() => {
+    isSpeakingRef.current = isSpeaking;
+  }, [isSpeaking]);
+
+  // Preload browser speechSynthesis voices
+  useEffect(() => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.getVoices();
+      const handleVoicesChanged = () => {
+        window.speechSynthesis.getVoices();
+      };
+      window.speechSynthesis.addEventListener?.(
+        'voiceschanged',
+        handleVoicesChanged
+      );
+      return () => {
+        window.speechSynthesis.removeEventListener?.(
+          'voiceschanged',
+          handleVoicesChanged
+        );
+      };
+    }
+  }, []);
+
+  const currentAccent =
+    GLOBAL_ACCENTS.find((a) => a.id === selectedAccent) || GLOBAL_ACCENTS[0];
+
+  // High-Graphic Voice Wave Canvas — Waves ONLY when voice is heard; flat straight line in silence
+  useEffect(() => {
+    const canvas = waveCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animId: number;
+    let phase = 0;
+    let smoothedEnergy = 0;
+    const timeDomainData = new Uint8Array(128);
+    const freqData = new Uint8Array(64);
+
+    const render = () => {
+      const w = canvas.width;
+      const h = canvas.height;
+      const midY = h / 2;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // Measure real-time voice energy
+      let targetEnergy = 0;
+
+      if (isListeningRef.current && analyserRef.current) {
+        try {
+          analyserRef.current.getByteTimeDomainData(timeDomainData);
+          analyserRef.current.getByteFrequencyData(freqData);
+
+          let sumSquares = 0;
+          for (let i = 0; i < timeDomainData.length; i++) {
+            const norm = (timeDomainData[i] - 128) / 128;
+            sumSquares += norm * norm;
+          }
+          const rms = Math.sqrt(sumSquares / timeDomainData.length);
+
+          if (rms >= VOICE_RMS_THRESHOLD) {
+            targetEnergy = Math.min(1, (rms - VOICE_RMS_THRESHOLD) * 6.5);
+          }
+        } catch {
+          targetEnergy = 0;
+        }
+      }
+
+      // Also respond if Web Speech API just emitted words or coach is speaking
+      if (speechEventBoostRef.current > 0.01) {
+        targetEnergy = Math.max(targetEnergy, speechEventBoostRef.current);
+        speechEventBoostRef.current *= 0.88;
+      } else {
+        speechEventBoostRef.current = 0;
+      }
+
+      if (isSpeakingRef.current) {
+        const pulse =
+          0.35 +
+          0.25 * Math.sin(phase * 2.3) +
+          0.15 * Math.cos(phase * 3.7);
+        targetEnergy = Math.max(targetEnergy, pulse);
+      }
+
+      // Smooth attack and fast decay to flat straight line on silence
+      if (targetEnergy > smoothedEnergy) {
+        smoothedEnergy = smoothedEnergy * 0.55 + targetEnergy * 0.45;
+      } else {
+        smoothedEnergy = smoothedEnergy * 0.78 + targetEnergy * 0.22;
+      }
+
+      // Subtle background center baseline guide
+      ctx.beginPath();
+      ctx.moveTo(0, midY);
+      ctx.lineTo(w, midY);
+      ctx.strokeStyle = 'rgba(203, 213, 225, 0.35)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // STRICT SILENCE RULE: If no voice is heard, draw a crisp straight horizontal line
+      if (smoothedEnergy < 0.015) {
+        ctx.beginPath();
+        ctx.moveTo(0, midY);
+        ctx.lineTo(w, midY);
+        ctx.strokeStyle = isListeningRef.current ? '#0B2545' : '#94A3B8';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        animId = requestAnimationFrame(render);
+        return;
+      }
+
+      // High-Graphic Multi-Layered Acoustic Wave when voice is active
+      phase += 0.18 + smoothedEnergy * 0.14;
+      const maxAmp = (h * 0.44) * smoothedEnergy;
+
+      const layers = [
+        {
+          freq: 0.022,
+          speed: 1.0,
+          ampScale: 1.0,
+          lineWidth: 3.0,
+          color: isSpeakingRef.current
+            ? 'rgba(212, 175, 55, 0.95)'
+            : 'rgba(225, 29, 72, 0.95)',
+        },
+        {
+          freq: 0.036,
+          speed: -1.35,
+          ampScale: 0.68,
+          lineWidth: 2.0,
+          color: isSpeakingRef.current
+            ? 'rgba(11, 37, 69, 0.65)'
+            : 'rgba(11, 37, 69, 0.7)',
+        },
+        {
+          freq: 0.052,
+          speed: 1.75,
+          ampScale: 0.42,
+          lineWidth: 1.5,
+          color: 'rgba(212, 175, 55, 0.55)',
+        },
+      ];
+
+      // Draw vertical acoustic spectrum bars in center when voice is active
+      const barCount = 36;
+      const barSpacing = w / barCount;
+      ctx.fillStyle = isSpeakingRef.current
+        ? 'rgba(212, 175, 55, 0.16)'
+        : 'rgba(225, 29, 72, 0.14)';
+      for (let i = 0; i < barCount; i++) {
+        const normX = i / barCount;
+        const envelope = Math.sin(normX * Math.PI);
+        const binVal = analyserRef.current
+          ? freqData[i % freqData.length] / 255
+          : 0.5 + 0.5 * Math.sin(i * 0.6 + phase);
+        const barH = Math.max(2, binVal * maxAmp * 1.5 * envelope);
+        const bx = i * barSpacing + barSpacing * 0.25;
+        ctx.fillRect(bx, midY - barH / 2, barSpacing * 0.5, barH);
+      }
+
+      // Draw 3 smooth harmonic sine waves
+      for (const layer of layers) {
+        ctx.beginPath();
+        for (let x = 0; x <= w; x += 2) {
+          const normX = x / w;
+          const windowEnvelope = Math.pow(Math.sin(normX * Math.PI), 1.6);
+          const wave1 = Math.sin(x * layer.freq + phase * layer.speed);
+          const wave2 =
+            0.45 * Math.cos(x * (layer.freq * 1.8) - phase * layer.speed * 0.7);
+          const y =
+            midY +
+            (wave1 + wave2) *
+              (maxAmp * layer.ampScale * 0.75) *
+              windowEnvelope;
+          if (x === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.strokeStyle = layer.color;
+        ctx.lineWidth = layer.lineWidth;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      }
+
+      animId = requestAnimationFrame(render);
+    };
+
+    render();
+    return () => cancelAnimationFrame(animId);
+  }, []);
+
+  // Cleanup mic stream & speech synthesis on unmount (analytics stay in SESSION_VOICE_STORE until page refresh)
+  useEffect(() => {
+    return () => {
+      stopMicrophoneCapture();
+      stopVoicePlaybackOnly();
+    };
+  }, []);
+
+  const updateCumulativeLanguageAnalytics = (
+    spokenSegment: string,
+    isCompletedTurn: boolean
+  ) => {
+    const clean = spokenSegment.trim();
+    if (!clean) return;
+
+    const fillerRegex =
+      /\b(um|uh|err|like|you know|basically|actually|sort of|kind of|literally|i mean)\b/gi;
+    const allDialogueUserText = [
+      ...dialogueLogRef.current
+        .filter((d) => d.speaker === 'YOU')
+        .map((d) => d.text),
+      ...(isCompletedTurn ? [] : [clean]),
+    ].join(' ');
+
+    const combinedCorpus = (allDialogueUserText || clean).trim();
+    const matches = combinedCorpus.match(fillerRegex) || [];
+    const uniqueFillers = Array.from(
+      new Set(matches.map((m) => m.toLowerCase()))
+    );
+    setFillerWordsCount(matches.length);
+    setDetectedFillers(uniqueFillers);
+
+    const wordsList = combinedCorpus
+      .toLowerCase()
+      .replace(/[^a-z0-9'\s-]/gi, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+    const totalWords = wordsList.length;
+    const uniqueWords = new Set(wordsList).size;
+
+    const sentencesList = combinedCorpus
+      .split(/[.!?]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const totalSentences = Math.max(1, sentencesList.length);
+    const avgWordsPerSentence = Math.round(totalWords / totalSentences);
+
+    let computedWpm = wpm;
+    if (speakingTime > 0 && totalWords > 0) {
+      const minutes = Math.max(0.1, speakingTime / 60);
+      computedWpm = Math.min(205, Math.max(85, Math.round(totalWords / minutes)));
+      setWpm(computedWpm);
+    } else if (totalWords > 0 && computedWpm === 0) {
+      computedWpm = 132;
+      setWpm(132);
+    }
+
+    const rawRatio = totalWords > 0 ? uniqueWords / totalWords : 0.75;
+    const lexicalDiversityPct = Math.min(
+      98,
+      Math.max(65, Math.round(rawRatio * 100 + Math.min(18, totalWords * 0.4)))
+    );
+
+    const pronunciationClarityPct = Math.min(
+      98,
+      Math.max(
+        72,
+        Math.round(92 - matches.length * 2.5 + (avgWordsPerSentence >= 7 ? 4 : 0))
+      )
+    );
+
+    const wpmDeviation = Math.abs((computedWpm || 132) - 138);
+    const confidencePacingPct = Math.min(
+      98,
+      Math.max(
+        70,
+        Math.round(94 - wpmDeviation * 0.25 - matches.length * 3)
+      )
+    );
+
+    const paceLabel =
+      computedWpm > 165
+        ? 'Fast Pace'
+        : computedWpm < 105 && computedWpm > 0
+        ? 'Calm / Deliberate'
+        : 'Optimal Pace';
+
+    const userTurnsCount =
+      dialogueLogRef.current.filter((d) => d.speaker === 'YOU').length +
+      (isCompletedTurn ? 0 : 1);
+
+    const updatedAnalytics: UserLanguageAnalytics = {
+      totalWordsSpoken: totalWords,
+      uniqueWordsCount: uniqueWords,
+      totalSentences,
+      avgWordsPerSentence,
+      turnsCount: Math.max(1, userTurnsCount),
+      lexicalDiversityPct,
+      pronunciationClarityPct,
+      confidencePacingPct,
+      paceLabel,
+      allUserWords: wordsList,
+      lastAnalyzedText: clean,
+    };
+
+    SESSION_VOICE_STORE.analytics = updatedAnalytics;
+    setLanguageAnalytics(updatedAnalytics);
+  };
+
+  const analyzeSpeechTelemetry = (text: string) => {
+    updateCumulativeLanguageAnalytics(text, false);
+  };
+
+  // Timer while speaking
+  useEffect(() => {
+    if (isListening) {
+      timerRef.current = setInterval(() => {
+        setSpeakingTime((t) => {
+          const next = t + 1;
+          const combined = (
+            finalTranscriptRef.current +
+            ' ' +
+            interimTranscriptRef.current
+          ).trim();
+          const words = combined.split(/\s+/).filter(Boolean).length;
+          const minutes = next / 60;
+          if (minutes > 0 && words > 0) {
+            setWpm(Math.min(210, Math.round(words / minutes)));
+          }
+          return next;
+        });
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isListening]);
+
+  // Real-Time Voice Activity Detection (VAD) & 2-Second Silence Auto-Send Loop
+  useEffect(() => {
+    if (!isListening || isAnalyzing) {
+      setSilenceElapsedMs(0);
+      setVoiceDetectedActive(false);
+      return;
+    }
+
+    const timeDomainBuf = new Uint8Array(128);
+
+    const checkInterval = setInterval(() => {
+      if (
+        !isListeningRef.current ||
+        isAnalyzingRef.current ||
+        isTranscribingRef.current ||
+        isSpeakingRef.current
+      ) {
+        setSilenceElapsedMs(0);
+        return;
+      }
+
+      const currentSpoken = (
+        finalTranscriptRef.current +
+        ' ' +
+        interimTranscriptRef.current
+      ).trim();
+
+      // 1. Check real microphone RMS voice amplitude for live wave & VAD (ignore first 350ms button tap)
+      const sinceMicStart = Date.now() - micStartedAtRef.current;
+      if (analyserRef.current && sinceMicStart > 350) {
+        try {
+          analyserRef.current.getByteTimeDomainData(timeDomainBuf);
+          let sumSq = 0;
+          for (let i = 0; i < timeDomainBuf.length; i++) {
+            const norm = (timeDomainBuf[i] - 128) / 128;
+            sumSq += norm * norm;
+          }
+          const rms = Math.sqrt(sumSq / timeDomainBuf.length);
+
+          if (rms >= VOICE_RMS_THRESHOLD) {
+            voiceFrameCountRef.current += 1;
+            // Require at least 5 frames (~400ms) of sustained speech so clicks/breaths never trigger false sends
+            if (voiceFrameCountRef.current >= 5) {
+              hasRecordedVoiceRef.current = true;
+            }
+            lastSpeechActivityRef.current = Date.now();
+            setSilenceElapsedMs(0);
+            setVoiceDetectedActive(true);
+            return;
+          } else {
+            setVoiceDetectedActive(false);
+          }
+        } catch {
+          // Ignore analyser read error
+        }
+      }
+
+      const hasValidSpeechToSend =
+        currentSpoken.length > 0 || hasRecordedVoiceRef.current;
+
+      if (!hasValidSpeechToSend || lastSpeechActivityRef.current === 0) {
+        setSilenceElapsedMs(0);
+        return;
+      }
+
+      const elapsed = Date.now() - lastSpeechActivityRef.current;
+      setSilenceElapsedMs(Math.min(PAUSE_AUTO_SEND_MS, elapsed));
+
+      // Automatically send after 2 seconds (2000ms) of no voice
+      if (elapsed >= PAUSE_AUTO_SEND_MS) {
+        lastSpeechActivityRef.current = 0;
+        voiceFrameCountRef.current = 0;
+        setSilenceElapsedMs(0);
+
+        if (currentSpoken) {
+          hasRecordedVoiceRef.current = false;
+          submitSpokenText(currentSpoken, true);
+        } else if (
+          hasRecordedVoiceRef.current &&
+          mediaRecorderRef.current &&
+          mediaRecorderRef.current.state === 'recording'
+        ) {
+          hasRecordedVoiceRef.current = false;
+          stopAndTranscribeMediaRecorder(true);
+        }
+      }
+    }, 80);
+
+    return () => clearInterval(checkInterval);
+  }, [isListening, isAnalyzing]);
+
+  const pickBestVoice = (
+    voices: SpeechSynthesisVoice[],
+    langCode: string,
+    gender: VoiceGender
+  ): SpeechSynthesisVoice | undefined => {
+    if (!voices || voices.length === 0) return undefined;
+    const targetLang = langCode.toLowerCase();
+    const baseLang = targetLang.split('-')[0];
+    const hints = gender === 'Female' ? FEMALE_VOICE_HINTS : MALE_VOICE_HINTS;
+    const oppositeHints =
+      gender === 'Female' ? MALE_VOICE_HINTS : FEMALE_VOICE_HINTS;
+
+    const exactLocaleVoices = voices.filter(
+      (v) => v.lang.toLowerCase().replace('_', '-') === targetLang
+    );
+    const englishVoices = voices.filter((v) =>
+      v.lang.toLowerCase().startsWith(baseLang)
+    );
+
+    const matchGender = (list: SpeechSynthesisVoice[]) => {
+      // 1. Prefer high-clarity Neural / Natural / Online / Google voices matching gender
+      const neuralGenderMatch = list.find((v) => {
+        const lowerName = v.name.toLowerCase();
+        const isHighQuality =
+          lowerName.includes('natural') ||
+          lowerName.includes('online') ||
+          lowerName.includes('neural') ||
+          lowerName.includes('google') ||
+          lowerName.includes('premium') ||
+          lowerName.includes('enhanced');
+        return isHighQuality && hints.some((h) => lowerName.includes(h));
+      });
+      if (neuralGenderMatch) return neuralGenderMatch;
+
+      // 2. Any voice explicitly matching gender hints
+      const explicitMatch = list.find((v) => {
+        const lowerName = v.name.toLowerCase();
+        return hints.some((h) => lowerName.includes(h));
+      });
+      if (explicitMatch) return explicitMatch;
+
+      // 3. Prefer high-quality Neural / Natural / Google voice not matching opposite gender
+      const neuralNonOpposite = list.find((v) => {
+        const lowerName = v.name.toLowerCase();
+        const isHighQuality =
+          lowerName.includes('natural') ||
+          lowerName.includes('online') ||
+          lowerName.includes('neural') ||
+          lowerName.includes('google');
+        return isHighQuality && !oppositeHints.some((h) => lowerName.includes(h));
+      });
+      if (neuralNonOpposite) return neuralNonOpposite;
+
+      const nonOpposite = list.find((v) => {
+        const lowerName = v.name.toLowerCase();
+        return !oppositeHints.some((h) => lowerName.includes(h));
+      });
+      return nonOpposite;
+    };
+
+    return (
+      matchGender(exactLocaleVoices) ||
+      matchGender(englishVoices) ||
+      exactLocaleVoices[0] ||
+      englishVoices[0] ||
+      voices[0]
+    );
+  };
+
+  // Normalize text for fast, continuous human speech clarity & natural pronunciation
+  const formatTextForHumanSpeech = (raw: string): string => {
+    return raw
+      .replace(/[*#_`~>"]/g, '')
+      .replace(/—/g, ' ')
+      .replace(/;/g, '. ')
+      .replace(/:/g, ' ')
+      .replace(/\bO\(log\s*n\)/gi, 'O of log N')
+      .replace(/\bO\(n\s*log\s*n\)/gi, 'O of N log N')
+      .replace(/\bO\(n\^2\)|O\(n²\)/gi, 'O of N squared')
+      .replace(/\bO\(n\)/gi, 'O of N')
+      .replace(/\bO\(1\)/gi, 'O of 1')
+      .replace(/\bDBMS\b/g, 'D B M S')
+      .replace(/\bSQL\b/g, 'sequel')
+      .replace(/\bNoSQL\b/gi, 'No sequel')
+      .replace(/\bOOPs?\b/g, 'O O P')
+      .replace(/\bDSA\b/g, 'D S A')
+      .replace(/\bREST\s*APIs?\b/gi, 'rest A P I')
+      .replace(/\bAPIs?\b/g, 'A P I')
+      .replace(/\bHTML\b/g, 'H T M L')
+      .replace(/\bCSS\b/g, 'C S S')
+      .replace(/\bJS\b/g, 'JavaScript')
+      .replace(/\bTS\b/g, 'TypeScript')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  };
+
+  const stopVoicePlaybackOnly = () => {
+    isSpeakingRef.current = false;
+    setIsSpeaking(false);
+
+    if (autoResumeTimerRef.current) {
+      clearTimeout(autoResumeTimerRef.current);
+      autoResumeTimerRef.current = null;
+    }
+
+    if (activeUtteranceRef.current) {
+      activeUtteranceRef.current.onstart = null;
+      activeUtteranceRef.current.onend = null;
+      activeUtteranceRef.current.onerror = null;
+      activeUtteranceRef.current = null;
+    }
+
+    if (neuralAudioRef.current) {
+      try {
+        neuralAudioRef.current.onplay = null;
+        neuralAudioRef.current.onended = null;
+        neuralAudioRef.current.onerror = null;
+        neuralAudioRef.current.pause();
+        neuralAudioRef.current.currentTime = 0;
+      } catch {}
+      neuralAudioRef.current = null;
+    }
+
+    if ('speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
+  };
+
+  const stopAllVoiceAndMic = () => {
+    // Mark manual stop so NO background callback, timer, or auto-resume can restart activity
+    userManuallyStoppedRef.current = true;
+
+    if (autoResumeTimerRef.current) {
+      clearTimeout(autoResumeTimerRef.current);
+      autoResumeTimerRef.current = null;
+    }
+    if (recRestartTimerRef.current) {
+      clearTimeout(recRestartTimerRef.current);
+      recRestartTimerRef.current = null;
+    }
+    if (activeAbortControllerRef.current) {
+      try {
+        activeAbortControllerRef.current.abort();
+      } catch {}
+      activeAbortControllerRef.current = null;
+    }
+
+    const pendingSpoken = (
+      finalTranscriptRef.current +
+      ' ' +
+      interimTranscriptRef.current
+    ).trim();
+
+    stopMicrophoneCapture();
+    stopVoicePlaybackOnly();
+    isAnalyzingRef.current = false;
+    isTranscribingRef.current = false;
+    setIsAnalyzing(false);
+    setIsTranscribingAudio(false);
+    setSilenceElapsedMs(0);
+
+    // Preserve and analyze any words the user spoke before clicking Stop so analytics stay available
+    if (pendingSpoken) {
+      const updatedUserLog = [
+        ...dialogueLogRef.current,
+        { speaker: 'YOU' as const, text: pendingSpoken },
+      ];
+      dialogueLogRef.current = updatedUserLog;
+      setDialogueLog(updatedUserLog);
+      const localCritique = buildContextualClientCritique(pendingSpoken);
+      setCritique(localCritique);
+      updateCumulativeLanguageAnalytics(pendingSpoken, true);
+    }
+
+    finalTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
+    setLivePreviewWords('');
+  };
+
+  const speakWithBrowserNaturalVoice = (
+    spokenText: string,
+    resumeMicOnEnd: boolean
+  ) => {
+    if (userManuallyStoppedRef.current) return;
+
+    if (!('speechSynthesis' in window)) {
+      if (resumeMicOnEnd && autoResumeRef.current && !userManuallyStoppedRef.current) {
+        autoResumeTimerRef.current = setTimeout(() => {
+          if (!userManuallyStoppedRef.current) {
+            startMicrophoneCapture();
+          }
+        }, 400);
+      }
+      return;
+    }
+    try {
+      if (activeUtteranceRef.current) {
+        activeUtteranceRef.current.onstart = null;
+        activeUtteranceRef.current.onend = null;
+        activeUtteranceRef.current.onerror = null;
+        activeUtteranceRef.current = null;
+      }
+      window.speechSynthesis.cancel();
+
+      const activeAccent =
+        GLOBAL_ACCENTS.find((a) => a.id === selectedAccentRef.current) ||
+        GLOBAL_ACCENTS[0];
+      const activeGender = voiceGenderRef.current;
+
+      const utterance = new SpeechSynthesisUtterance(spokenText);
+      activeUtteranceRef.current = utterance;
+      utterance.lang = activeAccent.langCode;
+      // Natural, fluent human pitch and pace (supports custom speed up to 2.3x and beyond)
+      utterance.pitch = 1.0;
+      utterance.rate = Math.max(0.75, Math.min(3.0, voiceSpeedRef.current));
+      utterance.volume = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const chosenVoice = pickBestVoice(
+        voices,
+        activeAccent.langCode,
+        activeGender
+      );
+      if (chosenVoice) {
+        utterance.voice = chosenVoice;
+      }
+
+      utterance.onstart = () => {
+        if (userManuallyStoppedRef.current) {
+          window.speechSynthesis.cancel();
+          return;
+        }
+        isSpeakingRef.current = true;
+        setIsSpeaking(true);
+      };
+      utterance.onend = () => {
+        activeUtteranceRef.current = null;
+        isSpeakingRef.current = false;
+        setIsSpeaking(false);
+        if (
+          resumeMicOnEnd &&
+          autoResumeRef.current &&
+          !userManuallyStoppedRef.current
+        ) {
+          autoResumeTimerRef.current = setTimeout(() => {
+            if (
+              !userManuallyStoppedRef.current &&
+              !isSpeakingRef.current &&
+              !isAnalyzingRef.current
+            ) {
+              startMicrophoneCapture();
+            }
+          }, 400);
+        }
+      };
+      utterance.onerror = () => {
+        activeUtteranceRef.current = null;
+        isSpeakingRef.current = false;
+        setIsSpeaking(false);
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+    }
+  };
+
+  const speakText = (text: string, resumeMicOnEnd = false) => {
+    if (!text) return;
+    // Stop mic & previous audio immediately so coach never hears its own voice
+    if (isListeningRef.current) {
+      stopMicrophoneCapture();
+    }
+    stopVoicePlaybackOnly();
+
+    const humanPreparedText = formatTextForHumanSpeech(text);
+    // Speak immediately (0ms delay) with brisk 1.15x natural fluency
+    speakWithBrowserNaturalVoice(humanPreparedText, resumeMicOnEnd);
+  };
+
+  const stopAndTranscribeMediaRecorder = (autoSendResult = true) => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+
+    isTranscribingRef.current = true;
+    setIsTranscribingAudio(true);
+
+    recorder.onstop = async () => {
+      const chunks = [...audioChunksRef.current];
+      audioChunksRef.current = [];
+      const mimeType = recorder.mimeType || 'audio/webm';
+
+      stopMicrophoneCapture();
+
+      if (chunks.length === 0) {
+        isTranscribingRef.current = false;
+        setIsTranscribingAudio(false);
+        return;
+      }
+
+      const blob = new Blob(chunks, { type: mimeType });
+      if (blob.size < 200) {
+        isTranscribingRef.current = false;
+        setIsTranscribingAudio(false);
+        return;
+      }
+
+      try {
+        const base64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const resStr =
+              typeof reader.result === 'string' ? reader.result : '';
+            resolve(resStr.includes(',') ? resStr.split(',')[1] : '');
+          };
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(blob);
+        });
+
+        if (base64 && !userManuallyStoppedRef.current) {
+          const controller = new AbortController();
+          activeAbortControllerRef.current = controller;
+          const res = await fetch('/api/interview/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audioBase64: base64, mimeType }),
+            signal: controller.signal,
+          });
+          if (res.ok && !userManuallyStoppedRef.current) {
+            const data = await res.json();
+            const spoken =
+              typeof data?.transcript === 'string'
+                ? data.transcript.trim()
+                : '';
+            if (spoken && !userManuallyStoppedRef.current) {
+              const combined = (
+                finalTranscriptRef.current
+                  ? finalTranscriptRef.current + ' '
+                  : ''
+              ) + spoken;
+              finalTranscriptRef.current = combined;
+              setLivePreviewWords(combined);
+              analyzeSpeechTelemetry(combined);
+              isTranscribingRef.current = false;
+              setIsTranscribingAudio(false);
+              if (autoSendResult && !userManuallyStoppedRef.current) {
+                await submitSpokenText(combined, true);
+              }
+              return;
+            }
+          }
+        }
+      } catch {
+        // Ignore transcription error or manual abort
+      }
+
+      isTranscribingRef.current = false;
+      setIsTranscribingAudio(false);
+      if (autoResumeRef.current && !userManuallyStoppedRef.current) {
+        startMicrophoneCapture();
+      }
+    };
+
+    try {
+      recorder.stop();
+    } catch {
+      isTranscribingRef.current = false;
+      setIsTranscribingAudio(false);
+    }
+  };
+
+  const stopMicrophoneCapture = () => {
+    isListeningRef.current = false;
+    hasRecordedVoiceRef.current = false;
+    voiceFrameCountRef.current = 0;
+    speechEventBoostRef.current = 0;
+    setIsListening(false);
+    setVoiceDetectedActive(false);
+    setSilenceElapsedMs(0);
+
+    if (recRestartTimerRef.current) {
+      clearTimeout(recRestartTimerRef.current);
+      recRestartTimerRef.current = null;
+    }
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.abort();
+      } catch {}
+      recognitionRef.current = null;
+    }
+
+    if (mediaRecorderRef.current) {
+      try {
+        if (mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.onstop = null;
+          mediaRecorderRef.current.stop();
+        }
+      } catch {}
+      mediaRecorderRef.current = null;
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    if (audioContextRef.current) {
+      try {
+        audioContextRef.current.close();
+      } catch {}
+      audioContextRef.current = null;
+      analyserRef.current = null;
+    }
+  };
+
+  // Robust mobile-safe audio stream retriever with progressive constraint fallbacks
+  const getMicrophoneStream = async (): Promise<MediaStream> => {
+    // 1. Modern standard navigator.mediaDevices.getUserMedia
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (err: any) {
+        // OverconstrainedError / NotSupportedError is very frequent on mobile phone hardware mics!
+        // Fallback to basic audio constraint:
+        return await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+    }
+
+    // 2. Fallback to legacy vendor getUserMedia for older mobile browsers / webviews
+    const legacyGUM =
+      (navigator as any).getUserMedia ||
+      (navigator as any).webkitGetUserMedia ||
+      (navigator as any).mozGetUserMedia ||
+      (navigator as any).msGetUserMedia;
+
+    if (legacyGUM) {
+      return new Promise<MediaStream>((resolve, reject) => {
+        legacyGUM.call(navigator, { audio: true }, resolve, reject);
+      });
+    }
+
+    throw new Error('Microphone API is not supported on this device/browser.');
+  };
+
+  const startAudioStreamAndRecorder = async (): Promise<boolean> => {
+    try {
+      const stream = await getMicrophoneStream();
+
+      if (!isListeningRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return false;
+      }
+
+      setMicPermissionError(null);
+      mediaStreamRef.current = stream;
+
+      const AudioCtx =
+        window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        let audioCtx = audioContextRef.current;
+        if (!audioCtx || audioCtx.state === 'closed') {
+          audioCtx = new AudioCtx();
+          audioContextRef.current = audioCtx;
+        }
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(() => {});
+        }
+        try {
+          const source = audioCtx.createMediaStreamSource(stream);
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.65;
+          source.connect(analyser);
+          analyserRef.current = analyser;
+        } catch {}
+      }
+
+      if (typeof MediaRecorder !== 'undefined') {
+        audioChunksRef.current = [];
+        let mimeType = '';
+        const candidateTypes = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/mp4',
+          'audio/aac',
+          'audio/ogg',
+          'audio/wav',
+        ];
+        if (MediaRecorder.isTypeSupported) {
+          for (const t of candidateTypes) {
+            if (MediaRecorder.isTypeSupported(t)) {
+              mimeType = t;
+              break;
+            }
+          }
+        }
+
+        const recorder = mimeType
+          ? new MediaRecorder(stream, { mimeType })
+          : new MediaRecorder(stream);
+
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            audioChunksRef.current.push(e.data);
+          }
+        };
+        mediaRecorderRef.current = recorder;
+        recorder.start(200);
+      }
+      return true;
+    } catch (err: any) {
+      console.warn('Microphone access note:', err);
+      const isDenied =
+        err?.name === 'NotAllowedError' ||
+        err?.name === 'PermissionDeniedError' ||
+        err?.name === 'SecurityError';
+      const isNotFound =
+        err?.name === 'NotFoundError' ||
+        err?.name === 'DevicesNotFoundError';
+      const isBusy =
+        err?.name === 'NotReadableError' ||
+        err?.name === 'TrackStartError';
+
+      let msg = 'Could not access phone microphone. Please tap to allow mic permissions.';
+      if (isDenied) {
+        msg = 'Microphone permission blocked. On your phone, tap the lock/tune icon near your browser address bar, set Microphone to "Allow", and tap Retry Mic.';
+      } else if (isNotFound) {
+        msg = 'No microphone found on this device. Please connect an audio input.';
+      } else if (isBusy) {
+        msg = 'Microphone is currently held by another app or call. Please close other audio apps and try again.';
+      }
+      setMicPermissionError(msg);
+      return false;
+    }
+  };
+
+  const startMicrophoneCapture = async () => {
+    userManuallyStoppedRef.current = false;
+    stopVoicePlaybackOnly();
+    setMicPermissionError(null);
+
+    // Synchronously unlock AudioContext directly on the user's touch/click gesture (crucial for iOS Safari)
+    const AudioCtx =
+      window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioCtx) {
+      try {
+        if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+          audioContextRef.current = new AudioCtx();
+        }
+        if (audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume().catch(() => {});
+        }
+      } catch {}
+    }
+
+    // Clear any stale partial transcripts from prior turns so only fresh speech is sent
+    finalTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
+    lastSpeechActivityRef.current = 0;
+    hasRecordedVoiceRef.current = false;
+    voiceFrameCountRef.current = 0;
+    micStartedAtRef.current = Date.now();
+    setLivePreviewWords('');
+    setSilenceElapsedMs(0);
+
+    isListeningRef.current = true;
+    setIsListening(true);
+
+    // 1. Start real-time AudioStream + AnalyserNode + MediaRecorder with fallback for mobile hardware
+    const audioStreamOk = await startAudioStreamAndRecorder();
+
+    // 2. Also start Web Speech API for instant real-time word recognition
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+
+    let speechRecOk = false;
+    if (SpeechRecognition) {
+      try {
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.onresult = null;
+            recognitionRef.current.onerror = null;
+            recognitionRef.current.onend = null;
+            recognitionRef.current.abort();
+          } catch {}
+        }
+
+        const activeAccent =
+          GLOBAL_ACCENTS.find((a) => a.id === selectedAccentRef.current) ||
+          GLOBAL_ACCENTS[0];
+
+        const isMobilePhone =
+          /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+            navigator.userAgent || ''
+          );
+
+        const recognition = new SpeechRecognition();
+        // On mobile phones (e.g. Chrome Android), continuous: true causes immediate crash/audio-capture error!
+        // We use continuous: false on mobile with seamless restart in onend
+        recognition.continuous = !isMobilePhone;
+        recognition.interimResults = true;
+        recognition.lang = activeAccent.langCode || 'en-US';
+
+        recognition.onresult = (event: any) => {
+          let finalChunk = '';
+          let interimChunk = '';
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalChunk += event.results[i][0].transcript + ' ';
+            } else {
+              interimChunk += event.results[i][0].transcript;
+            }
+          }
+
+          if (finalChunk.trim()) {
+            const updatedFinal = (
+              finalTranscriptRef.current
+                ? finalTranscriptRef.current + ' '
+                : ''
+            ) + finalChunk.trim();
+            finalTranscriptRef.current = updatedFinal;
+            analyzeSpeechTelemetry(updatedFinal);
+          }
+
+          interimTranscriptRef.current = interimChunk;
+          const combined = (
+            finalTranscriptRef.current +
+            (interimChunk ? ' ' + interimChunk : '')
+          ).trim();
+          setLivePreviewWords(combined);
+
+          if (finalChunk.trim() || interimChunk.trim()) {
+            speechEventBoostRef.current = 0.75;
+            lastSpeechActivityRef.current = Date.now();
+            setSilenceElapsedMs(0);
+            setVoiceDetectedActive(true);
+          }
+        };
+
+        recognition.onerror = (e: any) => {
+          if (
+            (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') &&
+            !mediaStreamRef.current
+          ) {
+            setMicPermissionError(
+              'Microphone permission was denied. Tap the lock icon in your phone browser to allow microphone access.'
+            );
+          }
+        };
+
+        recognition.onend = () => {
+          if (
+            isListeningRef.current &&
+            !isAnalyzingRef.current &&
+            !userManuallyStoppedRef.current
+          ) {
+            recRestartTimerRef.current = setTimeout(() => {
+              if (
+                isListeningRef.current &&
+                !isAnalyzingRef.current &&
+                !userManuallyStoppedRef.current &&
+                recognitionRef.current
+              ) {
+                try {
+                  recognitionRef.current.start();
+                } catch {}
+              }
+            }, 120);
+          }
+        };
+
+        recognitionRef.current = recognition;
+        recognition.start();
+        speechRecOk = true;
+      } catch (err: any) {
+        console.warn('SpeechRecognition initialization note:', err);
+      }
+    }
+
+    // If both failed to get mic access, reset listening state so user is not stuck
+    if (!audioStreamOk && !speechRecOk) {
+      stopMicrophoneCapture();
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isListening) {
+      const pendingText = (
+        finalTranscriptRef.current +
+        ' ' +
+        interimTranscriptRef.current
+      ).trim();
+
+      if (pendingText) {
+        stopMicrophoneCapture();
+        submitSpokenText(pendingText, false);
+      } else if (
+        hasRecordedVoiceRef.current &&
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state === 'recording' &&
+        audioChunksRef.current.length > 0
+      ) {
+        stopAndTranscribeMediaRecorder(true);
+      } else {
+        stopMicrophoneCapture();
+      }
+    } else {
+      startMicrophoneCapture();
+    }
+  };
+
+  const buildContextualClientCritique = (spokenText: string): CritiqueResult => {
+    const clean = spokenText.trim();
+    const lower = clean.toLowerCase();
+    const words = clean.split(/\s+/).filter(Boolean);
+    const wordCount = words.length;
+    const fillers =
+      clean.match(
+        /\b(um|uh|err|like|you know|basically|actually|sort of|kind of|literally|i mean)\b/gi
+      ) || [];
+
+    const sentences = clean
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const targetPhrase = sentences[0] || clean.slice(0, 85);
+
+    const hasWeakConnectors =
+      /\b(and then|so like|because like|very good|lot of things)\b/i.test(clean);
+    const fluencyScore = Math.max(
+      72,
+      Math.min(
+        98,
+        Math.round(88 - fillers.length * 4 + (wordCount >= 10 ? 6 : -2))
+      )
+    );
+    const grammarScore = Math.max(
+      74,
+      Math.min(
+        98,
+        Math.round(90 - (hasWeakConnectors ? 5 : 0) - fillers.length * 2)
+      )
+    );
+    const rating = Math.min(
+      10,
+      Math.max(7, Math.round((fluencyScore + grammarScore) / 20))
+    );
+
+    let spokenReply = '';
+
+    // 1. Science & Nature Real-World Questions
+    if (/\b(photosynthesis)\b/i.test(lower)) {
+      spokenReply = `Photosynthesis is the biological process by which green plants use sunlight, water, and carbon dioxide to create glucose for energy and release oxygen into the atmosphere.`;
+    } else if (/\b(why is the sky blue)\b/i.test(lower)) {
+      spokenReply = `The sky is blue because Earth's atmosphere scatters sunlight in all directions, and shorter blue wavelengths are scattered much more than red wavelengths—a process called Rayleigh scattering.`;
+    } else if (/\b(why is the ocean salty|why is sea water salty)\b/i.test(lower)) {
+      spokenReply = `The ocean is salty because rain breaks down continental rocks over millions of years, washing mineral ions—mainly sodium and chloride—into rivers and down into the sea.`;
+    } else if (/\b(how do airplanes? fly|how planes? fly)\b/i.test(lower)) {
+      spokenReply = `Airplanes fly using four aerodynamic forces: lift, weight, thrust, and drag. As curved wings move forward through the air, they create higher air pressure underneath than above, generating upward lift.`;
+    } else if (/\b(gravity|how does gravity work)\b/i.test(lower)) {
+      spokenReply = `Gravity is the universal attractive force between masses. In general relativity, Einstein showed that mass and energy actually curve spacetime, causing objects to follow curved paths toward one another.`;
+    } else if (/\b(black holes?)\b/i.test(lower)) {
+      spokenReply = `A black hole is an extremely dense region of spacetime where gravitational pull is so immense that nothing, not even light, can escape once past its event horizon.`;
+    } else if (/\b(dna|deoxyribonucleic)\b/i.test(lower)) {
+      spokenReply = `DNA is the double-helix molecule inside cells that carries the genetic blueprint for the development, functioning, and reproduction of all living organisms.`;
+    } else if (/\b(mitochondria|mitochondrion)\b/i.test(lower)) {
+      spokenReply = `Mitochondria are the powerhouses of eukaryotic cells. They generate most of the chemical energy needed by the cell in the form of adenosine triphosphate, or ATP.`;
+    } else if (/\b(speed of light)\b/i.test(lower)) {
+      spokenReply = `The speed of light in a vacuum is approximately 299,792 kilometers per second, or about 186,000 miles per second—the universal cosmic speed limit.`;
+    } else if (/\b(atoms?|atomic structure)\b/i.test(lower)) {
+      spokenReply = `Atoms are the basic building blocks of ordinary matter, consisting of a dense central nucleus of protons and neutrons surrounded by a cloud of orbiting electrons.`;
+    } else if (/\b(quantum computing|quantum computer)\b/i.test(lower)) {
+      spokenReply = `Quantum computing harnesses the laws of quantum mechanics—specifically superposition and entanglement—using quantum bits or qubits to solve specific complex computational problems exponentially faster than classical computers.`;
+    } else if (/\b(how do microwaves? work)\b/i.test(lower)) {
+      spokenReply = `Microwave ovens heat food by emitting electromagnetic radiation that directly excites water and fat molecules inside the food, causing rapid vibration and thermal heat.`;
+    } else if (/\b(how does wi-?fi work)\b/i.test(lower)) {
+      spokenReply = `Wi-Fi transmits data wirelessly across radio frequencies—typically 2.4 gigahertz and 5 gigahertz—between your device and a wireless router connected to the internet.`;
+    } else if (/\b(how do batteries work)\b/i.test(lower)) {
+      spokenReply = `Batteries convert chemical energy into electrical energy through electrochemical oxidation and reduction reactions, sending electrons flowing through an external circuit from anode to cathode.`;
+    } else if (/\b(climate change|global warming)\b/i.test(lower)) {
+      spokenReply = `Climate change refers to long-term shifts in global temperatures and weather patterns, largely driven by human greenhouse gas emissions trapping solar heat in the atmosphere.`;
+
+    // 2. World Capitals & Geography
+    } else if (/\b(capital of france)\b/i.test(lower)) {
+      spokenReply = `The capital of France is Paris, famous for its cultural heritage, art museums like the Louvre, and iconic landmarks like the Eiffel Tower.`;
+    } else if (/\b(capital of japan)\b/i.test(lower)) {
+      spokenReply = `The capital of Japan is Tokyo, the world's most populous metropolitan area and a global hub for technology, culture, and business.`;
+    } else if (/\b(capital of india)\b/i.test(lower)) {
+      spokenReply = `The capital of India is New Delhi, the seat of the government and the executive, legislative, and judiciary branches of the country.`;
+    } else if (/\b(capital of (the )?(usa|united states|america))\b/i.test(lower)) {
+      spokenReply = `The capital of the United States is Washington, D.C., located on the Potomac River bordered by Maryland and Virginia.`;
+    } else if (/\b(capital of (the )?(uk|united kingdom|britain|england))\b/i.test(lower)) {
+      spokenReply = `The capital of the United Kingdom and England is London, situated along the River Thames.`;
+    } else if (/\b(capital of canada)\b/i.test(lower)) {
+      spokenReply = `The capital of Canada is Ottawa, located in Ontario along the border with Quebec.`;
+    } else if (/\b(capital of australia)\b/i.test(lower)) {
+      spokenReply = `The capital of Australia is Canberra, chosen as a compromise between Sydney and Melbourne in 1908.`;
+    } else if (/\b(capital of germany)\b/i.test(lower)) {
+      spokenReply = `The capital of Germany is Berlin, celebrated for its rich history, vibrant arts scene, and historic landmarks like the Brandenburg Gate.`;
+    } else if (/\b(capital of italy)\b/i.test(lower)) {
+      spokenReply = `The capital of Italy is Rome, known historically as the Eternal City and home to ancient wonders like the Colosseum and Vatican City.`;
+    } else if (/\b(capital of spain)\b/i.test(lower)) {
+      spokenReply = `The capital of Spain is Madrid, situated at the geographical heart of the Iberian Peninsula.`;
+    } else if (/\b(capital of china)\b/i.test(lower)) {
+      spokenReply = `The capital of China is Beijing, one of the world's oldest cities with a history spanning over three millennia.`;
+    } else if (/\b(capital of russia)\b/i.test(lower)) {
+      spokenReply = `The capital of Russia is Moscow, anchored by the iconic Red Square and the historic Kremlin.`;
+    } else if (/\b(capital of brazil)\b/i.test(lower)) {
+      spokenReply = `The capital of Brazil is Brasília, a master-planned modernist city inaugurated in 1960.`;
+    } else if (/\b(highest mountain|tallest mountain|mount everest)\b/i.test(lower)) {
+      spokenReply = `Mount Everest in the Himalayas is the highest mountain above sea level, standing at 8,848.86 meters or 29,031.7 feet on the border of Nepal and China.`;
+    } else if (/\b(largest ocean)\b/i.test(lower)) {
+      spokenReply = `The Pacific Ocean is the world's largest and deepest ocean, covering more than 30 percent of the Earth's surface area.`;
+
+    // 3. Computer Science & Technology Concepts
+    } else if (/\b(what is (an? )?api|rest apis?|application programming interface)\b/i.test(lower)) {
+      spokenReply = `An API, or Application Programming Interface, is a set of defined rules and protocols that lets different software applications communicate and exchange data with each other seamlessly.`;
+    } else if (/\b(polymorphism)\b/i.test(lower)) {
+      spokenReply = `Polymorphism in OOP allows objects to take on multiple forms—via compile-time method overloading and runtime method overriding. What language are you implementing polymorphism in?`;
+    } else if (/\b(encapsulation)\b/i.test(lower)) {
+      spokenReply = `Encapsulation bundles data and methods together inside a class while restricting direct access using private access modifiers. How do you protect sensitive fields in your classes?`;
+    } else if (/\b(abstraction)\b/i.test(lower)) {
+      spokenReply = `Abstraction hides internal implementation details and reveals only essential interfaces using abstract classes and interfaces. What abstract pattern do you use most?`;
+    } else if (/\b(inheritance)\b/i.test(lower)) {
+      spokenReply = `Inheritance enables a derived child class to inherit fields and methods from a parent base class, promoting code reusability. Have you encountered multiple inheritance challenges like the diamond problem?`;
+    } else if (/\b(oop|object oriented)\b/i.test(lower)) {
+      spokenReply = `The four core pillars of OOP are Encapsulation, Abstraction, Inheritance, and Polymorphism. Which pillar plays the biggest role in your current project?`;
+    } else if (/\b(deadlock)\b/i.test(lower)) {
+      spokenReply = `A deadlock occurs when two or more processes are blocked forever, each holding a lock the other needs—governed by Mutual Exclusion, Hold and Wait, No Preemption, and Circular Wait. How do you prevent deadlocks?`;
+    } else if (/\b(process vs thread|difference between process and thread)\b/i.test(lower)) {
+      spokenReply = `A process is an independent executing program with its own memory space, while a thread is a lightweight execution unit sharing the parent process's memory. How do you handle concurrency safely?`;
+    } else if (/\b(virtual memory|paging|segmentation)\b/i.test(lower)) {
+      spokenReply = `Virtual memory gives processes the illusion of contiguous physical RAM by mapping virtual addresses to page frames, preventing memory fragmentation and page faults.`;
+    } else if (/\b(acid)\b/i.test(lower)) {
+      spokenReply = `ACID stands for Atomicity, Consistency, Isolation, and Durability—guaranteeing reliable transactions in relational database management systems. How do you maintain isolation in high-throughput systems?`;
+    } else if (/\b(normalization|1nf|2nf|3nf|bcnf)\b/i.test(lower)) {
+      spokenReply = `Database normalization organizes schemas into standard forms like 1NF, 2NF, and 3NF to eliminate redundancy and insertion anomalies. Do you prefer normalized SQL or denormalized NoSQL?`;
+    } else if (/\b(sql vs nosql|difference between sql and nosql)\b/i.test(lower)) {
+      spokenReply = `SQL databases are structured, relational, and ACID-compliant with rigid schemas, while NoSQL databases scale horizontally and handle unstructured or semi-structured data models. Which do you use more?`;
+    } else if (/\b(indexing|index in sql|b-tree|btree)\b/i.test(lower)) {
+      spokenReply = `Database indexing creates B-tree or hash lookups to speed up query retrieval from O(N) down to O(log N) at the cost of extra write overhead. Have you tuned query performance with indexes?`;
+    } else if (/\b(binary search)\b/i.test(lower)) {
+      spokenReply = `Binary search locates an element in a sorted array in O(log n) time by continuously halving the search space. Have you tried binary search on the answer space?`;
+    } else if (/\b(recursion|recursive)\b/i.test(lower)) {
+      spokenReply = `Recursion solves complex problems by having a function call itself on smaller sub-problems until reaching a base case. What recursive algorithm are you working with today?`;
+    } else if (/\b(dynamic programming|\bdp\b|memoization|tabulation)\b/i.test(lower)) {
+      spokenReply = `Dynamic programming optimizes recursive problems exhibiting overlapping subproblems and optimal substructure using memoization or bottom-up tabulation. Which DP pattern is your favorite?`;
+    } else if (/\b(two pointers|sliding window)\b/i.test(lower)) {
+      spokenReply = `Sliding Window and Two Pointers reduce nested loop complexity from O(n²) to O(n) for contiguous subarray and pair-finding problems. Are you practicing array problems?`;
+    } else if (/\b(tree|graph|bst|binary search tree|bfs|dfs|dijkstra|topological)\b/i.test(lower)) {
+      spokenReply = `Graph and tree traversals use Breadth-First Search with queues or Depth-First Search with recursion to explore connected components and shortest paths. How do you represent graphs in code?`;
+    } else if (/\b(time complexity|space complexity|big o)\b/i.test(lower)) {
+      spokenReply = `Big-O analysis quantifies worst-case asymptotic runtime and memory growth, helping engineers choose optimal algorithms for large input scales. What complexity does your solution achieve?`;
+    } else if (/\b(microservices|monolith|load balancer|caching|redis|system design)\b/i.test(lower)) {
+      spokenReply = `In system design, horizontal scaling, reverse proxies, and caching layers like Redis reduce database latency and ensure high availability. What architecture are you designing?`;
+    } else if (/\b(rest api|http|https|status code)\b/i.test(lower)) {
+      spokenReply = `REST APIs exchange stateless JSON representations over HTTP verbs like GET, POST, PUT, and DELETE with clear status codes. Have you designed RESTful endpoints in your projects?`;
+    } else if (/\b(react|useState|useEffect|virtual dom)\b/i.test(lower)) {
+      spokenReply = `React builds declarative user interfaces using a virtual DOM and composable hooks to optimize component re-renders. What state management tool do you prefer with React?`;
+
+    // 4. Everyday Communication & Greetings
+    } else if (/^(hi|hello|hey|good morning|good afternoon|good evening|namaste)\b/i.test(clean) && wordCount <= 8) {
+      spokenReply = `Hello! I can hear you clearly. Ask me any real-world question, practice speaking, or explore any topic you like!`;
+    } else if (/how are you|who are you|what can you do/i.test(lower)) {
+      spokenReply = `I am your voice conversational coach and knowledge guide. You can ask me any real-world question—from science and geography to technical concepts—and practice speaking naturally.`;
+    } else if (/tell me a joke/i.test(lower)) {
+      spokenReply = `Why don't scientists trust atoms? Because they make up everything!`;
+    } else if (/tell me a fun fact/i.test(lower)) {
+      spokenReply = `Here is a fun fact: honey never spoils. Archaeologists have found pots of edible honey in ancient Egyptian tombs that are over three thousand years old!`;
+    } else if (/\b(tell me about yourself|introduce yourself|self introduction)\b/i.test(lower)) {
+      spokenReply = `A strong self-introduction highlights your background, your top 2 achievements or passions, and what you are looking forward to next. Shall we practice yours together?`;
+    } else if (/\b(what is|explain|how does|why is|define|tell me about)\b/i.test(lower)) {
+      const topicMatch = clean
+        .replace(/^(what is|explain|how does|why is|define|tell me about)\s+(a|an|the)?/i, '')
+        .replace(/[?.]+$/, '')
+        .trim();
+      spokenReply = topicMatch.length > 2
+        ? `Regarding ${topicMatch}: understanding its foundational principles and real-world significance provides great clarity. Would you like a deeper breakdown or practical examples?`
+        : `That is an interesting topic. Exploring its core definition and practical real-world applications helps build thorough understanding.`;
+    } else {
+      spokenReply = `Your thought on "${targetPhrase}" came through with clear vocal delivery. Feel free to ask any question or expand on this topic!`;
+    }
+
+    const cleanedText = clean
+      .replace(
+        /\b(um|uh|err|basically|actually|sort of|kind of|you know|i mean)\b\s*/gi,
+        ''
+      )
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    return {
+      rating,
+      fluencyScore,
+      grammarScore,
+      vocabularyScore: Math.min(
+        97,
+        Math.max(74, Math.round(85 + Math.min(12, wordCount * 0.5) - fillers.length * 2))
+      ),
+      clarityScore: Math.min(
+        98,
+        Math.max(76, Math.round(92 - fillers.length * 3))
+      ),
+      confidenceScore: Math.min(
+        98,
+        Math.max(74, Math.round(90 - fillers.length * 3 + (wordCount >= 8 ? 5 : 0)))
+      ),
+      spokenReply,
+      sectionToImprove:
+        fillers.length > 0
+          ? `In your phrase "${targetPhrase}", replace filler words (${Array.from(
+              new Set(fillers.map((f) => f.toLowerCase()))
+            ).join(', ')}) with a brief silent pause.`
+          : wordCount < 6
+          ? `Your statement was very concise—feel free to expand with more details or follow-up questions.`
+          : `Your sentence structure in "${targetPhrase}" is articulate—maintain this natural speaking rhythm and steady volume.`,
+      fluencyCritique:
+        fillers.length > 0
+          ? `You used ${fillers.length} filler word(s). Aim for a steady ${wpm || 135} WPM pace with deliberate pauses.`
+          : `Smooth speaking rhythm (${wpm || 135} WPM). Keep emphasizing key action verbs.`,
+      grammarCritique: hasWeakConnectors
+        ? `Replace casual connectors like "and then" or "so like" with structured transitions such as "Additionally" or "Consequently."`
+        : `Clear sentence structure. Maintain consistent verb tenses throughout your explanation.`,
+      vocabularyCritique: `Effective vocabulary choices with crisp diction.`,
+      refinedVersion:
+        cleanedText.charAt(0).toUpperCase() +
+        cleanedText.slice(1).replace(/[.!?]+$/, '') +
+        '.',
+    };
+  };
+
+  const submitSpokenText = async (
+    rawTextToSend?: string,
+    triggeredByVoicePause = false
+  ) => {
+    const fullText = (
+      rawTextToSend ??
+      finalTranscriptRef.current + ' ' + interimTranscriptRef.current
+    ).trim();
+
+    if (!fullText || isAnalyzingRef.current) return;
+
+    const wasListening = isListeningRef.current || triggeredByVoicePause;
+    if (isListeningRef.current) {
+      stopMicrophoneCapture();
+    }
+
+    // Clear input buffers immediately
+    finalTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
+    lastSpeechActivityRef.current = 0;
+    hasRecordedVoiceRef.current = false;
+    setLivePreviewWords('');
+    setSilenceElapsedMs(0);
+
+    // Append user's spoken message to the conversation thread right away
+    const updatedUserLog = [
+      ...dialogueLogRef.current,
+      { speaker: 'YOU' as const, text: fullText },
+    ];
+    dialogueLogRef.current = updatedUserLog;
+    setDialogueLog(updatedUserLog);
+
+    // Immediately compute language metrics for session persistence
+    const immediateLocalCritique = buildContextualClientCritique(fullText);
+    updateCumulativeLanguageAnalytics(fullText, true);
+
+    isAnalyzingRef.current = true;
+    setIsAnalyzing(true);
+
+    const activeAccent =
+      GLOBAL_ACCENTS.find((a) => a.id === selectedAccentRef.current) ||
+      GLOBAL_ACCENTS[0];
+
+    try {
+      const controller = new AbortController();
+      activeAbortControllerRef.current = controller;
+
+      // 16-second client timeout guard to give Gemini ample time to formulate an accurate answer
+      const timeoutPromise = new Promise<{ ok: boolean; json: () => Promise<any> }>((resolve) => {
+        setTimeout(() => {
+          resolve({
+            ok: false,
+            json: async () => immediateLocalCritique,
+          });
+        }, 16000);
+      });
+
+      const fetchPromise = fetch('/api/interview/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: currentCoachPromptRef.current || DEFAULT_MODE_TITLE,
+          userTranscript: fullText,
+          accentName: activeAccent.name,
+          modeTitle: DEFAULT_MODE_TITLE,
+          dialogueHistory: updatedUserLog,
+        }),
+        signal: controller.signal,
+      });
+
+      const res = await Promise.race([fetchPromise, timeoutPromise]);
+
+      if (userManuallyStoppedRef.current) {
+        return;
+      }
+
+      const data = await res.json();
+      if (userManuallyStoppedRef.current) {
+        return;
+      }
+
+      const localFallback = immediateLocalCritique;
+
+      const finalCritique: CritiqueResult =
+        res.ok && data && typeof data.spokenReply === 'string' && data.spokenReply.length > 5
+          ? {
+              rating: typeof data.rating === 'number' ? data.rating : localFallback.rating,
+              fluencyScore: typeof data.fluencyScore === 'number' ? data.fluencyScore : localFallback.fluencyScore,
+              grammarScore:
+                typeof data.grammarScore === 'number'
+                  ? data.grammarScore
+                  : typeof data.starMethodScore === 'number'
+                  ? data.starMethodScore
+                  : localFallback.grammarScore,
+              vocabularyScore: localFallback.vocabularyScore,
+              clarityScore: localFallback.clarityScore,
+              confidenceScore: localFallback.confidenceScore,
+              spokenReply: data.spokenReply,
+              sectionToImprove:
+                data.sectionToImprove || localFallback.sectionToImprove,
+              fluencyCritique:
+                data.fluencyCritique || localFallback.fluencyCritique,
+              grammarCritique:
+                data.grammarCritique || localFallback.grammarCritique,
+              vocabularyCritique:
+                data.vocabularyCritique || localFallback.vocabularyCritique,
+              refinedVersion:
+                data.refinedVersion || localFallback.refinedVersion,
+            }
+          : localFallback;
+
+      setCritique(finalCritique);
+      const nextLog = [
+        ...updatedUserLog,
+        { speaker: 'COACH' as const, text: finalCritique.spokenReply },
+      ];
+      dialogueLogRef.current = nextLog;
+      setDialogueLog(nextLog);
+      setCurrentCoachPrompt(finalCritique.spokenReply);
+
+      if (!userManuallyStoppedRef.current) {
+        speakText(finalCritique.spokenReply, wasListening);
+      }
+
+      if (onSessionComplete) onSessionComplete();
+    } catch {
+      if (userManuallyStoppedRef.current) {
+        return;
+      }
+      const fallback = immediateLocalCritique;
+      setCritique(fallback);
+      const nextLog = [
+        ...updatedUserLog,
+        { speaker: 'COACH' as const, text: fallback.spokenReply },
+      ];
+      dialogueLogRef.current = nextLog;
+      setDialogueLog(nextLog);
+      setCurrentCoachPrompt(fallback.spokenReply);
+      speakText(fallback.spokenReply, wasListening);
+      if (onSessionComplete) onSessionComplete();
+    } finally {
+      isAnalyzingRef.current = false;
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleResetChat = () => {
+    stopMicrophoneCapture();
+    stopVoicePlaybackOnly();
+    isAnalyzingRef.current = false;
+    isTranscribingRef.current = false;
+    setIsAnalyzing(false);
+    setIsTranscribingAudio(false);
+    setCurrentCoachPrompt('');
+    dialogueLogRef.current = [];
+    setDialogueLog([]);
+    finalTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
+    lastSpeechActivityRef.current = 0;
+    hasRecordedVoiceRef.current = false;
+    setLivePreviewWords('');
+    setSilenceElapsedMs(0);
+    setCritique(null);
+    setSpeakingTime(0);
+    setWpm(0);
+    setFillerWordsCount(0);
+    setDetectedFillers([]);
+    const emptyAnalytics: UserLanguageAnalytics = {
+      totalWordsSpoken: 0,
+      uniqueWordsCount: 0,
+      totalSentences: 0,
+      avgWordsPerSentence: 0,
+      turnsCount: 0,
+      lexicalDiversityPct: 0,
+      pronunciationClarityPct: 0,
+      confidencePacingPct: 0,
+      paceLabel: 'Optimal',
+      allUserWords: [],
+      lastAnalyzedText: '',
+    };
+    setLanguageAnalytics(emptyAnalytics);
+    SESSION_VOICE_STORE.dialogueLog = [];
+    SESSION_VOICE_STORE.critique = null;
+    SESSION_VOICE_STORE.speakingTime = 0;
+    SESSION_VOICE_STORE.wpm = 0;
+    SESSION_VOICE_STORE.fillerWordsCount = 0;
+    SESSION_VOICE_STORE.detectedFillers = [];
+    SESSION_VOICE_STORE.currentCoachPrompt = '';
+    SESSION_VOICE_STORE.analytics = emptyAnalytics;
+  };
+
+  const remainingPauseSeconds = Math.max(
+    0,
+    (PAUSE_AUTO_SEND_MS - silenceElapsedMs) / 1000
+  ).toFixed(1);
+  const pauseProgressPct = Math.min(
+    100,
+    Math.round((silenceElapsedMs / PAUSE_AUTO_SEND_MS) * 100)
+  );
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-6 shadow-sm text-gray-900 space-y-5">
+      {/* Top Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-100 pb-4">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
+            Voice Coach
+          </h2>
+        </div>
+
+        {/* Male / Female Voice Selector + Fast Speed Selector */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 p-1 bg-[#FAFAFA] rounded-xl border border-gray-200 text-xs">
+            <button
+              type="button"
+              onClick={() => {
+                setVoiceGender('Male');
+                voiceGenderRef.current = 'Male';
+                if (currentCoachPrompt) {
+                  speakText(currentCoachPrompt, false);
+                }
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition cursor-pointer ${
+                voiceGender === 'Male'
+                  ? 'bg-[#0B2545] text-white shadow-2xs'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Male Voice</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setVoiceGender('Female');
+                voiceGenderRef.current = 'Female';
+                if (currentCoachPrompt) {
+                  speakText(currentCoachPrompt, false);
+                }
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition cursor-pointer ${
+                voiceGender === 'Female'
+                  ? 'bg-[#0B2545] text-white shadow-2xs'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Female Voice</span>
+            </button>
+          </div>
+
+          {/* Voice Speed Control */}
+          <div className="flex items-center gap-1 p-1 bg-[#FAFAFA] rounded-xl border border-gray-200 text-xs overflow-x-auto">
+            {[1.0, 1.25, 1.5, 1.75, 2.0, 2.3].map((spd) => (
+              <button
+                key={spd}
+                type="button"
+                onClick={() => {
+                  setVoiceSpeed(spd);
+                  voiceSpeedRef.current = spd;
+                  if (currentCoachPrompt) {
+                    speakText(currentCoachPrompt, false);
+                  }
+                }}
+                className={`px-2 py-1.5 rounded-lg font-mono font-semibold transition cursor-pointer whitespace-nowrap ${
+                  voiceSpeed === spd
+                    ? 'bg-[#0B2545] text-sky-400 shadow-2xs font-bold'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {spd === 2.0 ? '2x' : spd === 2.3 ? '2.3x' : `${spd}x`}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Accent Selector + Auto-Listen Toggle */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {GLOBAL_ACCENTS.map((acc) => (
+            <button
+              key={acc.id}
+              type="button"
+              onClick={() => setSelectedAccent(acc.id)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition cursor-pointer ${
+                selectedAccent === acc.id
+                  ? 'bg-[#18181B] text-white border-[#18181B]'
+                  : 'bg-[#FAFAFA] text-gray-700 border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <span>{acc.flag}</span>
+              <span>{acc.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer select-none bg-[#FAFAFA] px-3 py-1.5 rounded-xl border border-gray-200">
+          <input
+            type="checkbox"
+            checked={autoResumeAfterReply}
+            onChange={(e) => setAutoResumeAfterReply(e.target.checked)}
+            className="rounded border-gray-300 text-[#0B2545] focus:ring-sky-500"
+          />
+          <span>Auto-listen after coach replies</span>
+        </label>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left Column: Live Two-Way Voice Interaction */}
+        <div className="lg:col-span-7 space-y-4">
+          <div className="bg-[#FAFAFA] border border-gray-200 rounded-2xl p-4 sm:p-5 space-y-4">
+            {/* Coach Header */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#18181B] text-white flex items-center justify-center text-base font-bold shadow-xs">
+                  {currentAccent.flag}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-gray-900">
+                      {currentAccent.name} ({voiceGender})
+                    </h3>
+                    {isSpeaking && (
+                      <span className="text-[11px] font-semibold text-sky-600 animate-pulse">
+                        · Speaking...
+                      </span>
+                    )}
+                    {isAnalyzing && (
+                      <span className="text-[11px] font-semibold text-[#0B2545] animate-pulse">
+                        · Replying...
+                      </span>
+                    )}
+                  </div>
+                    {currentAccent.roleTitle ? (
+                      <p className="text-xs text-gray-500">{currentAccent.roleTitle}</p>
+                    ) : null}
+                </div>
+              </div>
+
+              {currentCoachPrompt && (
+                <button
+                  type="button"
+                  onClick={() => speakText(currentCoachPrompt, false)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-gray-200 hover:border-gray-300 text-xs font-semibold text-gray-800 shadow-2xs transition cursor-pointer"
+                >
+                  <Volume2 className="w-4 h-4 text-sky-600" />
+                  <span>Replay</span>
+                </button>
+              )}
+            </div>
+
+            {/* Interactive Conversation Thread */}
+            <div
+              ref={chatScrollRef}
+              className="bg-white border border-gray-200 rounded-xl p-4 min-h-[170px] max-h-72 overflow-y-auto space-y-3 scroll-smooth"
+            >
+              {dialogueLog.length === 0 &&
+              !livePreviewWords &&
+              !isAnalyzing &&
+              !isTranscribingAudio ? (
+                <div className="h-32 flex flex-col items-center justify-center text-center text-xs text-gray-400">
+                  <p className="font-medium text-gray-600">
+                    Tap the Microphone Below &amp; Speak Aloud
+                  </p>
+                  <p className="mt-0.5">
+                    Sends automatically after 2 seconds of silence.
+                  </p>
+                </div>
+              ) : (
+                dialogueLog.map((entry, index) => (
+                  <div
+                    key={index}
+                    className={`flex flex-col ${
+                      entry.speaker === 'YOU' ? 'items-end' : 'items-start'
+                    }`}
+                  >
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">
+                      {entry.speaker === 'YOU'
+                        ? 'You'
+                        : `Voice Coach (${voiceGender})`}
+                    </span>
+                    <div
+                      className={`rounded-xl px-3.5 py-2.5 text-xs sm:text-sm max-w-[90%] leading-relaxed ${
+                        entry.speaker === 'YOU'
+                          ? 'bg-[#0B2545] text-white'
+                          : 'bg-[#F8FAFC] border border-gray-200 text-gray-900'
+                      }`}
+                    >
+                      {entry.text}
+                    </div>
+                  </div>
+                ))
+              )}
+
+              {livePreviewWords && (
+                <div className="flex flex-col items-end">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600 mb-1">
+                    You (Speaking Live...)
+                  </span>
+                  <div className="rounded-xl px-3.5 py-2.5 text-xs sm:text-sm max-w-[90%] leading-relaxed bg-[#0B2545]/90 text-white">
+                    {livePreviewWords}
+                  </div>
+                </div>
+              )}
+
+              {isTranscribingAudio && !livePreviewWords && (
+                <div className="flex flex-col items-end">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">
+                    You
+                  </span>
+                  <div className="rounded-xl px-3.5 py-2.5 text-xs bg-[#0B2545]/90 text-white italic animate-pulse">
+                    Processing your voice...
+                  </div>
+                </div>
+              )}
+
+              {isAnalyzing && (
+                <div className="flex flex-col items-start">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">
+                    Voice Coach ({voiceGender})
+                  </span>
+                  <div className="rounded-xl px-3.5 py-2.5 text-xs bg-[#F8FAFC] border border-gray-200 text-gray-600 italic animate-pulse">
+                    Formulating spoken response...
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* High-Graphic Voice Waveform (Straight Line in Silence, Waves ONLY When Voice is Heard) */}
+            <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col items-center space-y-2.5">
+              <canvas
+                ref={waveCanvasRef}
+                width={640}
+                height={96}
+                className="w-full h-20"
+              />
+              <div className="w-full flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500 px-1">
+                <span>
+                  Microphone:{' '}
+                  <strong
+                    className={
+                      isListening
+                        ? voiceDetectedActive
+                          ? 'text-rose-600'
+                          : 'text-[#0B2545]'
+                        : isSpeaking
+                        ? 'text-sky-600'
+                        : 'text-gray-700'
+                    }
+                  >
+                    {isListening
+                      ? voiceDetectedActive
+                        ? 'Voice Detected — Wave Active'
+                        : 'Listening (Silence — Auto-sends after 2s without voice)'
+                      : isTranscribingAudio
+                      ? 'Sending Your Voice...'
+                      : isSpeaking
+                      ? `Coach Speaking (${voiceGender})...`
+                      : 'Tap Mic to Start Speaking'}
+                  </strong>
+                </span>
+                <span className="font-mono">
+                  {speakingTime}s · {wpm} WPM · {fillerWordsCount} Fillers
+                </span>
+              </div>
+
+              {/* 2-Second Silence Auto-Send Countdown Bar */}
+              {silenceElapsedMs > 150 && (
+                <div className="w-full pt-1 space-y-1">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-[#0B2545]">
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-sky-500" />
+                      <span>
+                        2s silence detected — auto-sending in{' '}
+                        {remainingPauseSeconds}s...
+                      </span>
+                    </span>
+                    <span className="font-mono text-[10px] text-gray-500">
+                      Auto-Send
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-[#0B2545] to-sky-400 transition-all duration-75 ease-linear rounded-full"
+                      style={{ width: `${pauseProgressPct}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Mobile / Phone Microphone Permission Alert & Recovery Banner */}
+            {micPermissionError && (
+              <div className="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs sm:text-sm animate-in fade-in duration-200">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-bold text-amber-950">
+                      Microphone Access Needed on Your Phone
+                    </p>
+                    <p className="text-amber-800 leading-relaxed text-xs">
+                      {micPermissionError}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMicPermissionError(null);
+                      startMicrophoneCapture();
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-semibold text-xs cursor-pointer shadow-xs transition"
+                  >
+                    Retry Mic
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMicPermissionError(null)}
+                    className="px-2 py-1 text-amber-700 hover:text-amber-950 text-xs font-bold cursor-pointer"
+                    aria-label="Dismiss message"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Action Controls — Mic Button, Dedicated Stop Button, and Reset */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={toggleRecording}
+                  disabled={isAnalyzing || isTranscribingAudio}
+                  className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs sm:text-sm font-semibold transition shadow-xs cursor-pointer disabled:opacity-50 ${
+                    isListening
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'bg-[#0B2545] hover:bg-[#13315C] text-white'
+                  }`}
+                >
+                  {isListening ? (
+                    <>
+                      <Mic className="w-4 h-4 animate-pulse" />
+                      <span>Listening (2s Auto-Send)</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-4 h-4 text-sky-400" />
+                      <span>Start Speaking (Mic)</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={stopAllVoiceAndMic}
+                  className="flex items-center gap-1.5 px-5 py-3 rounded-xl text-xs sm:text-sm font-semibold bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white transition shadow-xs cursor-pointer"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>Stop</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleResetChat}
+                className="flex items-center gap-1 px-3.5 py-2.5 rounded-xl text-xs font-medium bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Complete Persistent User Language Analytics & Critique Panel */}
+        <div className="lg:col-span-5 space-y-4">
+          <div className="bg-[#FAFAFA] border border-gray-200 rounded-2xl p-4 sm:p-5 space-y-4 h-full">
+            <div className="flex items-center justify-between border-b border-gray-200 pb-3">
+              <div className="flex items-center gap-2">
+                <Award className="w-5 h-5 text-sky-500" />
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900">
+                    User Language Analytics &amp; Critique
+                  </h3>
+                  <p className="text-[10px] text-gray-500">
+                    Saved across stops &amp; tabs until app refresh
+                  </p>
+                </div>
+              </div>
+              {critique && (
+                <span className="font-mono text-xs font-bold px-2.5 py-1 rounded-lg bg-[#0B2545] text-sky-300">
+                  Score: {critique.rating}/10
+                </span>
+              )}
+            </div>
+
+            {/* 6 Core Language Scorecards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+                  Spoken Fluency
+                </div>
+                <div className="text-base font-bold text-gray-900 font-mono mt-0.5">
+                  {critique ? `${critique.fluencyScore}%` : '—'}
+                </div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+                  Grammar &amp; Syntax
+                </div>
+                <div className="text-base font-bold text-emerald-700 font-mono mt-0.5">
+                  {critique ? `${critique.grammarScore}%` : '—'}
+                </div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+                  Vocabulary Richness
+                </div>
+                <div className="text-base font-bold text-[#0B2545] font-mono mt-0.5">
+                  {languageAnalytics.totalWordsSpoken > 0
+                    ? `${languageAnalytics.lexicalDiversityPct}%`
+                    : critique
+                    ? `${critique.vocabularyScore}%`
+                    : '—'}
+                </div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+                  Clarity &amp; Diction
+                </div>
+                <div className="text-base font-bold text-sky-700 font-mono mt-0.5">
+                  {languageAnalytics.totalWordsSpoken > 0
+                    ? `${languageAnalytics.pronunciationClarityPct}%`
+                    : critique
+                    ? `${critique.clarityScore}%`
+                    : '—'}
+                </div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+                  Confidence &amp; Pace
+                </div>
+                <div className="text-base font-bold text-indigo-700 font-mono mt-0.5">
+                  {languageAnalytics.totalWordsSpoken > 0
+                    ? `${languageAnalytics.confidencePacingPct}%`
+                    : critique
+                    ? `${critique.confidenceScore}%`
+                    : '—'}
+                </div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+                  Speech Rate
+                </div>
+                <div className="text-base font-bold text-gray-900 font-mono mt-0.5">
+                  {wpm > 0 ? `${wpm} WPM` : '—'}
+                </div>
+              </div>
+            </div>
+
+            {/* Session Speech Telemetry Bar */}
+            <div className="bg-white border border-gray-200 rounded-xl p-3 grid grid-cols-4 gap-2 text-center">
+              <div>
+                <div className="text-[10px] text-gray-400 uppercase font-semibold">
+                  Total Words
+                </div>
+                <div className="text-xs font-bold font-mono text-gray-900 mt-0.5">
+                  {languageAnalytics.totalWordsSpoken}
+                </div>
+              </div>
+              <div className="border-l border-gray-100">
+                <div className="text-[10px] text-gray-400 uppercase font-semibold">
+                  Unique Words
+                </div>
+                <div className="text-xs font-bold font-mono text-[#0B2545] mt-0.5">
+                  {languageAnalytics.uniqueWordsCount}
+                </div>
+              </div>
+              <div className="border-l border-gray-100">
+                <div className="text-[10px] text-gray-400 uppercase font-semibold">
+                  Speaking Time
+                </div>
+                <div className="text-xs font-bold font-mono text-gray-900 mt-0.5">
+                  {speakingTime}s
+                </div>
+              </div>
+              <div className="border-l border-gray-100">
+                <div className="text-[10px] text-gray-400 uppercase font-semibold">
+                  Fillers Used
+                </div>
+                <div className="text-xs font-bold font-mono text-rose-600 mt-0.5">
+                  {fillerWordsCount}
+                </div>
+              </div>
+            </div>
+
+            {critique ? (
+              <div className="space-y-3.5">
+                {/* Exact Section Where You Need to Improve */}
+                <div className="bg-sky-50/80 border border-sky-200/90 rounded-xl p-3.5 space-y-1.5">
+                  <div className="text-xs font-bold text-sky-950 flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-sky-600 shrink-0" />
+                    <span>Where to Improve (Specific Section Analysis)</span>
+                  </div>
+                  <p className="text-xs text-gray-800 leading-relaxed">
+                    {critique.sectionToImprove}
+                  </p>
+                </div>
+
+                {/* Detailed Breakdown: Fluency, Grammar, Vocabulary */}
+                <div className="bg-white border border-gray-200 rounded-xl p-3.5 space-y-3">
+                  <div>
+                    <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                      1. Fluency &amp; Pacing Critique ({languageAnalytics.paceLabel})
+                    </div>
+                    <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">
+                      {critique.fluencyCritique}
+                    </p>
+                  </div>
+
+                  <div className="border-t border-gray-100 pt-2.5">
+                    <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                      2. Grammar &amp; Sentence Structure (Avg {languageAnalytics.avgWordsPerSentence || 0} words/sentence)
+                    </div>
+                    <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">
+                      {critique.grammarCritique}
+                    </p>
+                  </div>
+
+                  <div className="border-t border-gray-100 pt-2.5">
+                    <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                      3. Vocabulary &amp; Word Choice ({languageAnalytics.uniqueWordsCount} unique words)
+                    </div>
+                    <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">
+                      {critique.vocabularyCritique}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Better / Polished Way to Say It */}
+                <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-3.5 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>Polished Way to Express It</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => speakText(critique.refinedVersion, false)}
+                      className="text-[11px] text-emerald-900 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>Listen</span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-800 leading-relaxed italic">
+                    &ldquo;{critique.refinedVersion}&rdquo;
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+                <div>
+                  <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                    1. Fluency &amp; Pacing Critique
+                  </div>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Evaluates speaking speed, rhythm, and pause control after you speak.
+                  </p>
+                </div>
+                <div className="border-t border-gray-100 pt-2.5">
+                  <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                    2. Grammar &amp; Sentence Structure
+                  </div>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Analyzes sentence clarity and transitions from your spoken turn.
+                  </p>
+                </div>
+                <div className="border-t border-gray-100 pt-2.5">
+                  <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                    3. Vocabulary &amp; Word Choice
+                  </div>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Provides a polished version of your exact spoken statement.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {detectedFillers.length > 0 && (
+              <div className="bg-white border border-gray-200 rounded-xl p-3">
+                <div className="text-[11px] font-semibold text-gray-700 mb-1">
+                  Filler Words Detected in Session:
+                </div>
+                <div className="text-xs text-rose-700 font-medium">
+                  {detectedFillers.map((f) => `"${f}"`).join(' · ')}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

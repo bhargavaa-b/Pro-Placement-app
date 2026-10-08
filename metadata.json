@@ -1,0 +1,6 @@
+{
+  "name": "Pro Placement",
+  "description": "Pro Placement by 3LLION Ventures — Comprehensive placement preparation and interactive communication platform.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

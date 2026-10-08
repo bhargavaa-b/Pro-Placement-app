@@ -1,0 +1,159 @@
+{
+  "entities": {
+    "CandidateProfile": {
+      "title": "CandidateProfile",
+      "description": "Candidate learning progress and public profile details",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Authenticated user UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Candidate full name",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "university": {
+          "type": "string",
+          "description": "Candidate institution or college name",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "graduationYear": {
+          "type": "string",
+          "description": "Graduation year",
+          "minLength": 0,
+          "maxLength": 16
+        },
+        "streakDays": {
+          "type": "number",
+          "description": "Active practice days count"
+        },
+        "streakShieldActive": {
+          "type": "boolean",
+          "description": "Whether the Gold Shield achievement is active"
+        },
+        "highGameScore": {
+          "type": "number",
+          "description": "Highest score in the coding runner game"
+        },
+        "solvedDSACount": {
+          "type": "number",
+          "description": "Total solved DSA problems count"
+        },
+        "solvedAptitudeCount": {
+          "type": "number",
+          "description": "Total completed aptitude drills count"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when last updated"
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "university",
+        "graduationYear",
+        "streakDays",
+        "streakShieldActive",
+        "highGameScore",
+        "solvedDSACount",
+        "solvedAptitudeCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CandidatePrivateInfo": {
+      "title": "CandidatePrivateInfo",
+      "description": "Isolated private PII document for candidate email and progress arrays",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Authenticated user UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Candidate email address",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": ["ownerId", "email", "createdAt", "updatedAt"]
+    },
+    "SolvedProblemRecord": {
+      "title": "SolvedProblemRecord",
+      "description": "Individual solved DSA or Aptitude item inside a bounded subcollection",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Authenticated user UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "problemId": {
+          "type": "string",
+          "description": "Problem identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "category": {
+          "type": "string",
+          "description": "DSA or APTITUDE",
+          "enum": ["DSA", "APTITUDE"],
+          "minLength": 3,
+          "maxLength": 16
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when solved"
+        }
+      },
+      "required": ["ownerId", "problemId", "category", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/CandidateProfile" },
+      "description": "Public candidate progress document owned by userId"
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/CandidatePrivateInfo" },
+      "description": "Isolated PII subcollection storing candidate email"
+    },
+    "/users/{userId}/solvedProblems/{problemId}": {
+      "schema": { "$ref": "#/entities/SolvedProblemRecord" },
+      "description": "Subcollection of solved DSA and Aptitude problems for a candidate"
+    }
+  }
+}

@@ -1,0 +1,116 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-cinzel: 'Cinzel', serif;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body, html, #root {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+    background-color: #F8FAFC;
+    color: #18181B;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  button, input, optgroup, select, textarea {
+    font-family: inherit;
+  }
+  
+  .font-cinzel {
+    font-family: 'Cinzel', serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Architectural Studio Background Pattern & Ambient Glow - Luminous Bright Blue & Classy */
+.pp-ambient-bg {
+  background-color: #F0F6FE;
+  background-image:
+    radial-gradient(at 5% 5%, rgba(14, 165, 233, 0.18) 0px, transparent 48%),
+    radial-gradient(at 95% 10%, rgba(59, 130, 246, 0.16) 0px, transparent 42%),
+    radial-gradient(at 50% 40%, rgba(6, 182, 212, 0.12) 0px, transparent 55%),
+    radial-gradient(at 80% 90%, rgba(37, 99, 235, 0.14) 0px, transparent 48%),
+    linear-gradient(180deg, #FFFFFF 0%, #F1F7FE 45%, #EAF3FD 100%);
+}
+
+.pp-architectural-grid {
+  background-size: 32px 32px;
+  background-image:
+    linear-gradient(to right, rgba(56, 189, 248, 0.09) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(56, 189, 248, 0.09) 1px, transparent 1px);
+  mask-image: radial-gradient(ellipse 95% 85% at 50% 35%, #000 50%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 95% 85% at 50% 35%, #000 50%, transparent 100%);
+}
+
+/* Classy subtle neutral scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F8FAFC;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+@keyframes threeLlionEntrance {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0) scale(0.86);
+  }
+  45% {
+    opacity: 1;
+    transform: translate3d(0, -4px, 0) scale(1.03);
+  }
+  75% {
+    opacity: 1;
+    transform: translate3d(0, 2px, 0) scale(0.995);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes threeLlionSheen {
+  0% {
+    transform: translate3d(-140%, 0, 0) skewX(-22deg);
+  }
+  100% {
+    transform: translate3d(240%, 0, 0) skewX(-22deg);
+  }
+}
+
+.animate-threelion-entrance {
+  animation: threeLlionEntrance 1.35s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.animate-threelion-sheen {
+  animation: threeLlionSheen 1.8s cubic-bezier(0.4, 0, 0.2, 1) 0.35s forwards;
+  will-change: transform;
+}

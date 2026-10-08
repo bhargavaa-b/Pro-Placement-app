@@ -1,0 +1,52 @@
+{
+  "packageId": "com.threelionventures.proplacement",
+  "host": "ais-pre-icz4xjvosb6v6nnyhw3oaq-191689882607.asia-southeast1.run.app",
+  "name": "Pro Placement",
+  "launcherName": "ProPlacement",
+  "display": "standalone",
+  "themeColor": "#0B2545",
+  "navigationColor": "#0B2545",
+  "navigationColorDark": "#0B2545",
+  "navigationDividerColor": "#D4AF37",
+  "navigationDividerColorDark": "#D4AF37",
+  "backgroundColor": "#FCFCFD",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://ais-pre-icz4xjvosb6v6nnyhw3oaq-191689882607.asia-southeast1.run.app/pwa-512x512.png",
+  "maskableIconUrl": "https://ais-pre-icz4xjvosb6v6nnyhw3oaq-191689882607.asia-southeast1.run.app/pwa-maskable-512x512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "proplacement-release"
+  },
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [
+    {
+      "name": "3,000+ DSA Hub",
+      "shortName": "DSA Hub",
+      "url": "/?tab=dsa",
+      "chosenIconUrl": "https://ais-pre-icz4xjvosb6v6nnyhw3oaq-191689882607.asia-southeast1.run.app/pwa-192x192.png"
+    },
+    {
+      "name": "Interactive Voice Coach",
+      "shortName": "Voice Coach",
+      "url": "/?tab=voice",
+      "chosenIconUrl": "https://ais-pre-icz4xjvosb6v6nnyhw3oaq-191689882607.asia-southeast1.run.app/pwa-192x192.png"
+    }
+  ],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://ais-pre-icz4xjvosb6v6nnyhw3oaq-191689882607.asia-southeast1.run.app/manifest.webmanifest",
+  "fallbackType": "webview",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://ais-pre-icz4xjvosb6v6nnyhw3oaq-191689882607.asia-southeast1.run.app/",
+  "minSdkVersion": 24,
+  "orientation": "portrait",
+  "fingerprints": []
+}

@@ -1,0 +1,76 @@
+[
+  {
+    "id": "cand-1790345657272-ljarn",
+    "name": "Bhargava B",
+    "email": "bhargavab27@gmail.com",
+    "university": "Sapthagiri NPS University",
+    "graduationYear": "2026",
+    "dreamCompany": "",
+    "targetPackage": "",
+    "targetRole": "",
+    "streakDays": 5,
+    "streakShieldActive": true,
+    "solvedDSAIds": [
+      "dsa-1",
+      "dsa-12",
+      "dsa-3"
+    ],
+    "solvedAptitudeIds": [
+      "apt_1790441314523_1",
+      "apt_1790443146719_2",
+      "apt_1790443451390_3",
+      "apt_1790443460695_4",
+      "apt_1790606246080_5",
+      "apt_1790606283520_6",
+      "apt_1790781286116_7",
+      "apt_1790781288906_8",
+      "apt_1790781291431_9",
+      "apt_1790781294052_10"
+    ],
+    "bookmarkedDSAIds": [],
+    "dailyTasksCompleted": {
+      "dsaToday": false,
+      "aptitudeToday": false,
+      "commToday": true,
+      "streakShieldChecked": false
+    },
+    "highGameScore": 32629,
+    "lastActiveDate": "2026-10-01",
+    "lastHeartbeatMs": 1790865966844,
+    "createdAt": "2026-09-26T16:03:08.871149+00:00",
+    "consentGiven": true,
+    "avatarSeed": "bhargava b",
+    "lastStreakDate": "2026-10-01",
+    "dailyTasksDate": "2026-10-01",
+    "loginStartDate": "2026-09-26",
+    "mockTestsTaken": 0,
+    "avgMockAccuracy": 0
+  },
+  {
+    "id": "548f9246-afbd-40a0-8bee-a5ae95d5b8f6",
+    "name": "Bhargava B",
+    "email": "bhargavab981@gmail.con",
+    "university": "Sapthagiri NPS University",
+    "graduationYear": "2026",
+    "dreamCompany": "",
+    "targetPackage": "",
+    "targetRole": "",
+    "streakDays": 1,
+    "streakShieldActive": false,
+    "solvedDSAIds": [
+      "dsa-1"
+    ],
+    "solvedAptitudeIds": [],
+    "bookmarkedDSAIds": [],
+    "dailyTasksCompleted": {
+      "dsaToday": false,
+      "aptitudeToday": false,
+      "commToday": false,
+      "streakShieldChecked": false
+    },
+    "highGameScore": 0,
+    "lastActiveDate": "2026-09-28T14:46:21.495+00:00",
+    "lastHeartbeatMs": 1790861430558,
+    "createdAt": "2026-09-28T14:39:58.641627+00:00"
+  }
+]
