@@ -295,37 +295,6 @@ npx tsx firestore.rules.test.ts
 
 ---
 
-## 🏆 Hackathon Demo Scenarios & Judging Walkthrough
-
-Follow this **3-minute live presentation guide** to demonstrate maximum technical impact to judges:
-
-### ⏱️ Minute 0:00 - 0:45: The Problem & The Unified Dashboard
-1. Open the live app on desktop and mobile. Show the **PWA install prompt** and custom **Pro Placement squircle branding**.
-2. Log into the Candidate Dashboard. Point out the **4 glossy blue metric badges** (*Streak Days, DSA Solved, Aptitude Done, Arcade High Score*).
-3. Explain how all 4 placement preparation verticals are centralized with real-time state synchronization.
-
-### ⏱️ Minute 0:45 - 1:45: The Gemini AI Voice Coach (Live Speech Demo)
-1. Navigate to **Voice Coach**.
-2. Select an interview scenario (e.g., *"Explain your approach to designing a LRU Cache"* or an HR behavioral question).
-3. Tap the **Black & Red Microphone** button. Speak into your laptop or phone microphone.
-4. Show the live **PCM waveform visualizer** and streaming transcript preview.
-5. Tap **Finish Response**: Highlight how the server queries **Google Gemini 2.5 Flash** to provide a structured breakdown of:
-   - Grammatical fluency and multi-accent speech clarity.
-   - STAR methodology completion score.
-   - Technical problem-solving correctness.
-
-### ⏱️ Minute 1:45 - 2:30: Byte Runner Arcade (Gamified Retention)
-1. Open **Byte Runner 2D Game**.
-2. Demonstrate the pre-game launch modal with keyboard/swipe instructions.
-3. Play the interactive canvas runner: dodge memory leaks, collect optimization tokens, and hit the 500-point threshold to earn a **Gold Streak Shield**.
-4. Show how the game prevents streak loss if a student has an exam or emergency.
-
-### ⏱️ Minute 2:30 - 3:00: ATS Resume Optimizer & Security Architecture
-1. Open the **ATS Resume Builder**. Show the instant ATS score calculator that dynamically compares candidate projects against tech stack keywords.
-2. Open DevTools: Show that **zero API keys** are leaked in network headers, demonstrating our secure server-side Express proxy and double-vault client encryption.
-
----
-
 ## 🔒 Security, Privacy & Compliance Notice
 
 - **Zero Telemetry / Anti-AI Slop**: Pro Placement contains no third-party tracking scripts, advertising trackers, or hidden analytics pixels.
