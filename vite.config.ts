@@ -12,6 +12,7 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: [
+          'app-logo.png',
           'icon.svg',
           'apple-touch-icon.png',
           'pwa-192x192.png',
@@ -21,7 +22,7 @@ export default defineConfig(() => {
         manifest: {
           id: '/',
           name: 'Pro Placement — 3LLION Ventures',
-          short_name: 'ProPlacement',
+          short_name: 'Pro Placement',
           description:
             '3LLION Pro Placement Suite by Bhargava B — 3,000+ DSA Solutions, 10,000+ Aptitude Arena, AI Voice Coach, and Placement Arcade.',
           theme_color: '#0B2545',

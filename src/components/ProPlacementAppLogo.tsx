@@ -94,7 +94,7 @@ export const ProPlacementAppLogo: React.FC<ProPlacementAppLogoProps> = React.mem
     return (
       <div className={`inline-flex items-center gap-2 select-none ${className}`}>
         <div
-          className={`${dimensions} relative shrink-0 rounded-[22%] overflow-hidden bg-white`}
+          className={`${dimensions} relative shrink-0 rounded-[22%] overflow-hidden bg-transparent`}
         >
           <svg
             viewBox="0 0 1000 1000"
