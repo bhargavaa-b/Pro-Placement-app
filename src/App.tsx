@@ -14,6 +14,8 @@ import {
   LogOut,
   Flame,
   ArrowLeft,
+  Bell,
+  BellRing,
 } from 'lucide-react';
 import { UserProfile } from './types';
 import { ProfileManager } from './components/ProfileManager';
@@ -26,6 +28,9 @@ import { CurriculumRoadmap } from './components/CurriculumRoadmap';
 import { ByteRunnerGame } from './components/ByteRunnerGame';
 import { AtsResumeBuilder } from './components/AtsResumeBuilder';
 import { InterviewHub } from './components/InterviewHub';
+import { StreakNotificationModal } from './components/StreakNotificationModal';
+import { StreakUrgencyBanner } from './components/StreakUrgencyBanner';
+import { streakNotificationService } from './services/streakNotificationService';
 import {
   LegalModals,
   CookieConsentBanner,
@@ -92,7 +97,22 @@ function normalizeDailyStreak(profile: UserProfile): {
   const nowMs = Date.now();
   const emailKey = profile.email ? profile.email.trim().toLowerCase() : 'user';
 
-  // Persist current active timestamp
+  // Read previous active timestamp BEFORE recording current activity
+  let prevActiveMs = 0;
+  if (typeof profile.lastActiveTimestamp === 'number' && profile.lastActiveTimestamp > 0) {
+    prevActiveMs = profile.lastActiveTimestamp;
+  } else {
+    try {
+      const stored =
+        localStorage.getItem(`pp_last_active_${emailKey}`) ||
+        localStorage.getItem('pp_last_active_timestamp');
+      if (stored) prevActiveMs = Number(stored) || 0;
+    } catch {
+      // Ignore
+    }
+  }
+
+  // Update current active timestamp
   try {
     localStorage.setItem(`pp_last_active_${emailKey}`, String(nowMs));
     localStorage.setItem('pp_last_active_timestamp', String(nowMs));
@@ -136,37 +156,40 @@ function normalizeDailyStreak(profile: UserProfile): {
       : 0;
   let lastStreakDate = profile.lastStreakDate || '';
 
+  // 24-HOUR STRICT INACTIVITY ZERO RULE:
+  // If the user has not used the app within 24 hours (86,400,000 ms), their streak resets to zero.
+  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+  const isInactiveOver24Hours = prevActiveMs > 0 && (nowMs - prevActiveMs) > TWENTY_FOUR_HOURS_MS;
+  const daysDiff = lastStreakDate ? getDaysDifference(lastStreakDate, todayStr) : 999;
+
+  if (isInactiveOver24Hours || daysDiff > 1) {
+    // Inactive for more than 24 hours or missed days: zero streak immediately
+    streakDays = 0;
+    lastStreakDate = '';
+  }
+
   if (hasCompletedAnyTaskToday) {
     if (lastStreakDate === todayStr && streakDays >= 1) {
-      // Already credited today's streak
+      // Already completed tasks today and credited
       streakDays = Math.max(1, streakDays);
-    } else if (lastStreakDate && lastStreakDate !== todayStr) {
-      const diff = getDaysDifference(lastStreakDate, todayStr);
-      if (diff === 1 || (diff === 2 && profile.streakShieldActive)) {
-        streakDays = Math.max(0, streakDays) + 1;
-      } else {
-        streakDays = 1;
-      }
+    } else if (lastStreakDate && lastStreakDate !== todayStr && daysDiff === 1) {
+      // Completed consecutive day within 24 hours
+      streakDays = Math.max(0, streakDays) + 1;
       lastStreakDate = todayStr;
     } else {
-      streakDays = Math.max(1, streakDays);
+      // Started or restarted streak today
+      streakDays = 1;
       lastStreakDate = todayStr;
     }
   } else {
-    // 0 daily tasks completed today: check if yesterday's streak is still alive
+    // 0 daily tasks completed today: check if yesterday's streak is still alive within 24 hours
     if (lastStreakDate === todayStr) {
       streakDays = Math.max(0, streakDays);
-    } else if (lastStreakDate) {
-      const diff = getDaysDifference(lastStreakDate, todayStr);
-      if (diff === 1 || (diff === 2 && profile.streakShieldActive)) {
-        // Yesterday was active; today is still pending. Keep streak intact!
-        streakDays = Math.max(0, streakDays);
-      } else {
-        // Missed previous days without streak shield
-        streakDays = 0;
-        lastStreakDate = '';
-      }
+    } else if (lastStreakDate && daysDiff === 1 && !isInactiveOver24Hours) {
+      // Still within 24-hour window from yesterday; streak intact until 24h expires
+      streakDays = Math.max(0, streakDays);
     } else {
+      // Missed 24 hours without completing tasks: reset to zero!
       streakDays = 0;
       lastStreakDate = '';
     }
@@ -214,6 +237,7 @@ export default function App() {
     return 'contents';
   });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showStreakModal, setShowStreakModal] = useState(false);
   const [tabHistory, setTabHistory] = useState<NavTab[]>(() => {
     return activeTab !== 'contents' ? ['contents', activeTab] : ['contents'];
   });
@@ -451,6 +475,13 @@ export default function App() {
       window.removeEventListener('focus', handleActiveFocus);
     };
   }, [currentProfile?.email, syncWithRemoteCloud]);
+
+  // Phone Streak Retention Notification background watcher (24h rule, 8h warning window)
+  useEffect(() => {
+    if (!currentProfile) return;
+    const cleanup = streakNotificationService.startWatcher(currentProfile.streakDays || 1);
+    return () => cleanup();
+  }, [currentProfile?.streakDays]);
 
   const updateProfile = useCallback((updated: UserProfile) => {
     const normalized = normalizeDailyStreak(updated);
@@ -1108,8 +1139,13 @@ export default function App() {
 
           {/* Action Zone */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Daily Streak Indicator in Glassy Pink */}
-            <div className="relative overflow-hidden flex items-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-b from-[#FFF0F5] via-[#FCE7F3] to-[#FBCFE8] border border-pink-300 rounded-xl text-xs select-none shadow-[0_2px_8px_rgba(244,114,182,0.2),inset_0_1px_1px_rgba(255,255,255,0.95)] before:absolute before:inset-x-0 before:top-0 before:h-[45%] before:bg-gradient-to-b before:from-white/80 before:to-transparent before:pointer-events-none">
+            {/* Daily Streak Indicator in Glassy Pink with Phone Alert Modal */}
+            <button
+              type="button"
+              onClick={() => setShowStreakModal(true)}
+              title="Click to view Streak & configure Phone Retention Notifications"
+              className="relative overflow-hidden flex items-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-b from-[#FFF0F5] via-[#FCE7F3] to-[#FBCFE8] hover:from-[#FCE7F3] hover:to-[#F472B6]/30 border border-pink-300 rounded-xl text-xs select-none shadow-[0_2px_8px_rgba(244,114,182,0.2),inset_0_1px_1px_rgba(255,255,255,0.95)] before:absolute before:inset-x-0 before:top-0 before:h-[45%] before:bg-gradient-to-b before:from-white/80 before:to-transparent before:pointer-events-none transition cursor-pointer"
+            >
               <Flame className="w-3.5 h-3.5 text-pink-600 fill-pink-400 drop-shadow-[0_1px_3px_rgba(236,72,153,0.4)] relative z-10" />
               <span className="font-mono font-bold text-black tabular-nums relative z-10">
                 {currentProfile.streakDays}d
@@ -1117,7 +1153,17 @@ export default function App() {
               {currentProfile.streakShieldActive && (
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 relative z-10" />
               )}
-            </div>
+            </button>
+
+            {/* Dedicated Phone Streak Retention Notification Bell Button */}
+            <button
+              type="button"
+              onClick={() => setShowStreakModal(true)}
+              title="Phone Streak Retention Notification Settings"
+              className="relative flex items-center justify-center p-2 rounded-xl bg-gradient-to-b from-pink-50 to-pink-100/70 hover:from-pink-100 hover:to-pink-200 text-pink-700 border border-pink-200 transition cursor-pointer shadow-2xs"
+            >
+              <Bell className="w-3.5 h-3.5" />
+            </button>
 
             {/* Candidate Profile Button */}
             <button
@@ -1197,12 +1243,21 @@ export default function App() {
         )}
       </header>
 
+      {/* Phone Streak Inactivity Urgency Banner (Fires within 8 hours prior to 24h limit) */}
+      <StreakUrgencyBanner
+        streakDays={currentProfile.streakDays}
+        streakShieldActive={currentProfile.streakShieldActive}
+        onOpenNotificationModal={() => setShowStreakModal(true)}
+        onPracticeClick={() => handleTabChange('dsa')}
+      />
+
       {/* Main Content Area */}
       <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6">
         {activeTab === 'contents' && (
           <ContentsList
             currentProfile={currentProfile}
             onSelectTab={(tab: NavTab) => handleTabChange(tab)}
+            onOpenStreakModal={() => setShowStreakModal(true)}
           />
         )}
 
@@ -1363,6 +1418,13 @@ export default function App() {
         onClose={() => setLegalModal(null)}
         activeEmail={currentProfile.email}
         onAccountDeleted={handleLogout}
+      />
+      <StreakNotificationModal
+        isOpen={showStreakModal}
+        onClose={() => setShowStreakModal(false)}
+        streakDays={currentProfile.streakDays}
+        streakShieldActive={currentProfile.streakShieldActive}
+        onNavigateToPractice={(tab) => handleTabChange(tab as NavTab)}
       />
       <CookieConsentBanner />
     </div>

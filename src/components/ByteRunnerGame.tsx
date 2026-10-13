@@ -9,8 +9,6 @@ import {
   Maximize2,
   Minimize2,
   Zap,
-  ChevronLeft,
-  ChevronRight,
   Sparkles,
   Play,
 } from 'lucide-react';
@@ -62,7 +60,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [combo, setCombo] = useState(1);
-  const [dashReadyPct, setDashReadyPct] = useState(100);
   const [hasActiveArmor, setHasActiveArmor] = useState(false);
 
   // Keep callbacks in refs so updating parent state on Game Over NEVER restarts the canvas loop
@@ -229,14 +226,12 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
     moveLeft: () => void;
     moveRight: () => void;
     setTargetX: (clientX: number) => void;
-    dash: () => void;
     restart: () => void;
     start: () => void;
   }>({
     moveLeft: () => {},
     moveRight: () => {},
     setTargetX: () => {},
-    dash: () => {},
     restart: () => {},
     start: () => {},
   });
@@ -482,28 +477,12 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
       currentLane = Math.max(0, Math.min(LANE_COUNT - 1, nearestLane));
     };
 
-    const triggerDash = () => {
-      if (isGameOver || gameStateRef.current !== 'PLAYING') return;
-      if (dashCooldown <= 0 && dashFrames <= 0) {
-        dashFrames = 32;
-        dashCooldown = 100;
-        setDashReadyPct(0);
-        screenShake = 6;
-        playSound('dash');
-        addRing(player.x, player.y, 110, '#38BDF8');
-        addBurst(player.x, player.y, '#38BDF8', 22, 7.5);
-        addCallout(player.x, player.y - 28, 'BYTE DASH!', '#38BDF8');
-      }
-    };
-
     const startGame = () => {
       isGameOver = false;
       gameStateRef.current = 'PLAYING';
       currentScore = 0;
       currentCombo = 1;
       comboTimer = 0;
-      dashCooldown = 0;
-      dashFrames = 0;
       armorActive = false;
       screenShake = 0;
       hazards = [];
@@ -522,7 +501,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
 
       setScore(0);
       setCombo(1);
-      setDashReadyPct(100);
       setHasActiveArmor(false);
       setGameState('PLAYING');
       playSound('move');
@@ -534,8 +512,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
       currentScore = 0;
       currentCombo = 1;
       comboTimer = 0;
-      dashCooldown = 0;
-      dashFrames = 0;
       armorActive = false;
       screenShake = 0;
       hazards = [];
@@ -554,7 +530,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
 
       setScore(0);
       setCombo(1);
-      setDashReadyPct(100);
       setHasActiveArmor(false);
       setGameState('PLAYING');
     };
@@ -563,7 +538,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
       moveLeft,
       moveRight,
       setTargetX,
-      dash: triggerDash,
       restart: restartGame,
       start: startGame,
     };
@@ -597,15 +571,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
         e.preventDefault();
         heldKeys.right = true;
         moveRight();
-      } else if (
-        e.code === 'Space' ||
-        e.code === 'ArrowUp' ||
-        e.code === 'KeyW' ||
-        e.code === 'ShiftLeft' ||
-        e.code === 'ShiftRight'
-      ) {
-        e.preventDefault();
-        triggerDash();
       }
     };
 
@@ -623,19 +588,12 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
 
       // Strictly update game physics and score ONLY while actively playing
       if (!isGameOver && gameStateRef.current === 'PLAYING') {
-        const isDashing = dashFrames > 0;
-        const baseSpeed = 6.6 + Math.min(8.5, currentScore / 280);
-        const speed = (isDashing ? baseSpeed * 1.85 : baseSpeed) * dt;
+        const baseSpeed = 6.4 + Math.min(6.8, currentScore / 320);
+        const speed = baseSpeed * dt;
 
         gridScroll = (gridScroll + speed) % 64;
-        currentScore += Math.round((isDashing ? 2.2 : 1) * dt);
-        player.runCycle += (isDashing ? 0.45 : 0.28) * dt;
-
-        if (dashFrames > 0) {
-          dashFrames = Math.max(0, dashFrames - dt);
-        } else if (dashCooldown > 0) {
-          dashCooldown = Math.max(0, dashCooldown - 0.55 * dt);
-        }
+        currentScore += Math.round(1 * dt);
+        player.runCycle += 0.28 * dt;
 
         if (comboTimer > 0) {
           comboTimer -= dt;
@@ -656,27 +614,31 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
         if (heldKeys.left) {
           player.targetX = Math.max(
             trackLeft + player.r + 6,
-            player.targetX - 9.2 * dt
+            player.targetX - 16 * dt
           );
         }
         if (heldKeys.right) {
           player.targetX = Math.min(
             trackRight - player.r - 6,
-            player.targetX + 9.2 * dt
+            player.targetX + 16 * dt
           );
         }
 
         const dx = player.targetX - player.x;
-        player.x += dx * Math.min(1, 0.28 * dt);
-        player.tilt = Math.max(-0.38, Math.min(0.38, dx * 0.014));
+        // Silky smooth, highly responsive spring interpolation
+        player.x += dx * Math.min(1, 0.32 * dt);
+
+        // Smooth dynamic banking tilt
+        const targetTilt = Math.max(-0.35, Math.min(0.35, dx * 0.012));
+        player.tilt += (targetTilt - player.tilt) * Math.min(1, 0.22 * dt);
 
         player.trail.push({
           x: player.x,
           y: player.y,
-          dash: isDashing,
+          dash: false,
           bit: Math.random() > 0.5 ? '1' : '0',
         });
-        if (player.trail.length > 12) player.trail.shift();
+        if (player.trail.length > 10) player.trail.shift();
 
         // Spawn Byte Runner Obstacles
         hazardTimer += dt;
@@ -798,7 +760,7 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
         // Update Hazards & Check Collisions
         for (let i = hazards.length - 1; i >= 0; i--) {
           const h = hazards[i];
-          h.y += (isDashing ? h.vy * 1.65 : h.vy) * dt;
+          h.y += h.vy * dt;
           h.x += h.vx * dt;
           h.phase += 0.14 * dt;
 
@@ -817,22 +779,7 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
           const dist = Math.hypot(player.x - nearestX, player.y - nearestY);
 
           if (dist < player.r - 2) {
-            if (isDashing) {
-              const shatterPts = 120 * currentCombo;
-              currentScore += shatterPts;
-              screenShake = 7;
-              playSound('shatter');
-              addBurst(h.x + h.w / 2, h.y + h.h / 2, '#38BDF8', 20, 8);
-              addRing(h.x + h.w / 2, h.y + h.h / 2, 85, '#38BDF8');
-              addCallout(
-                h.x + h.w / 2,
-                h.y,
-                `SHATTER +${shatterPts}!`,
-                '#38BDF8'
-              );
-              hazards.splice(i, 1);
-              continue;
-            } else if (armorActive) {
+            if (armorActive) {
               armorActive = false;
               setHasActiveArmor(false);
               screenShake = 9;
@@ -858,7 +805,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
             comboTimer = 210;
             const grazePts = 75 * currentCombo;
             currentScore += grazePts;
-            dashCooldown = Math.max(0, dashCooldown - 18);
             playSound('graze');
             addBurst(nearestX, nearestY, '#FDE047', 10, 4.5);
             addCallout(
@@ -894,10 +840,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
                 comboTimer = 220;
                 const pts = (p.kind === 'OVERDRIVE' ? 120 : 50) * currentCombo;
                 currentScore += pts;
-                dashCooldown = Math.max(
-                  0,
-                  dashCooldown - (p.kind === 'OVERDRIVE' ? 32 : 14)
-                );
                 playSound('orb');
                 addBurst(
                   p.x,
@@ -927,7 +869,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
             hudSyncTick = 0;
             setScore(Math.floor(currentScore));
             setCombo(currentCombo);
-            setDashReadyPct(Math.round(100 - dashCooldown));
           }
         }
       }
@@ -946,33 +887,56 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
 
       const isOverdrive = dashFrames > 0 || currentCombo >= 5;
 
-      // 1. Cyber Horizon Backdrop
+      // 1. Premium Cyber Deep Cosmic Backdrop
       const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-      bgGrad.addColorStop(0, '#040711');
-      bgGrad.addColorStop(0.5, isOverdrive ? '#091E3A' : '#0A1122');
-      bgGrad.addColorStop(1, '#050814');
+      bgGrad.addColorStop(0, '#020617');
+      bgGrad.addColorStop(0.4, isOverdrive ? '#0B254E' : '#081226');
+      bgGrad.addColorStop(1, '#030712');
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, W, H);
 
-      // 2. Parallax Starfield
+      // Neon Horizon Ambient Glow
+      const horizonGrad = ctx.createRadialGradient(
+        W / 2,
+        0,
+        10,
+        W / 2,
+        0,
+        Math.max(W * 0.7, 320)
+      );
+      horizonGrad.addColorStop(
+        0,
+        isOverdrive ? 'rgba(56, 189, 248, 0.32)' : 'rgba(99, 102, 241, 0.22)'
+      );
+      horizonGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = horizonGrad;
+      ctx.fillRect(0, 0, W, H * 0.45);
+
+      // 2. Parallax Starfield & Cyber Dust Particles
       stars.forEach((s) => {
         if (!isGameOver) {
           s.ry = (s.ry + (s.speed * dt) / H) % 1;
         }
-        ctx.fillStyle = 'rgba(226, 232, 240, 0.45)';
+        ctx.fillStyle = isOverdrive
+          ? 'rgba(186, 230, 253, 0.65)'
+          : 'rgba(226, 232, 240, 0.4)';
         ctx.beginPath();
         ctx.arc(s.rx * W, s.ry * H, s.size, 0, Math.PI * 2);
         ctx.fill();
       });
 
-      // 3. Byte Runner Track & Lane Dividers
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+      // 3. Byte Runner Track & Luminous Lane Dividers
+      const trackGrad = ctx.createLinearGradient(trackLeft, 0, trackRight, 0);
+      trackGrad.addColorStop(0, 'rgba(8, 15, 34, 0.92)');
+      trackGrad.addColorStop(0.5, 'rgba(12, 24, 52, 0.82)');
+      trackGrad.addColorStop(1, 'rgba(8, 15, 34, 0.92)');
+      ctx.fillStyle = trackGrad;
       ctx.fillRect(trackLeft, 0, trackWidth, H);
 
-      // Horizontal scrolling grid lines
+      // Perspective Speed Grid Lines
       ctx.strokeStyle = isOverdrive
-        ? 'rgba(56, 189, 248, 0.18)'
-        : 'rgba(148, 163, 184, 0.11)';
+        ? 'rgba(56, 189, 248, 0.22)'
+        : 'rgba(99, 102, 241, 0.16)';
       ctx.lineWidth = 1;
       for (let y = gridScroll; y < H; y += 64) {
         ctx.beginPath();
@@ -981,46 +945,72 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
         ctx.stroke();
       }
 
-      // Vertical Lane Dividers
+      // Vertical Laser Lane Dividers with Electric Cyan Border Glow
       for (let l = 0; l <= LANE_COUNT; l++) {
         const lx = trackLeft + l * laneWidth;
         const isBorder = l === 0 || l === LANE_COUNT;
         ctx.strokeStyle = isBorder
           ? isOverdrive
-            ? '#38BDF8'
-            : '#D4AF37'
-          : 'rgba(148, 163, 184, 0.16)';
-        ctx.lineWidth = isBorder ? 3 : 1;
+            ? '#00F2FE'
+            : '#38BDF8'
+          : 'rgba(99, 102, 241, 0.22)';
+        ctx.lineWidth = isBorder ? 3.5 : 1;
         ctx.beginPath();
         ctx.moveTo(lx, 0);
         ctx.lineTo(lx, H);
         ctx.stroke();
       }
 
-      // 4. Render Data Byte Pickups
+      // 4. Render Data Byte Pickups (Glowing Cyber Cubes & Streak Shields)
       pickups.forEach((p) => {
         ctx.save();
         const pulseR = p.r + Math.sin(p.phase * 2) * 2;
         if (p.kind === 'SHIELD') {
-          ctx.fillStyle = 'rgba(52, 211, 153, 0.28)';
-          ctx.strokeStyle = '#34D399';
+          // 3D Golden Streak Shield with Energy Ring
+          ctx.translate(p.x, p.y);
+          const shieldGrad = ctx.createLinearGradient(0, -pulseR, 0, pulseR);
+          shieldGrad.addColorStop(0, '#FEF08A');
+          shieldGrad.addColorStop(0.5, '#F59E0B');
+          shieldGrad.addColorStop(1, '#B45309');
+
+          ctx.fillStyle = shieldGrad;
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          // Hexagonal Shield Crest
+          for (let i = 0; i < 6; i++) {
+            const angle = (i * Math.PI) / 3;
+            const hx = Math.cos(angle) * (pulseR + 2);
+            const hy = Math.sin(angle) * (pulseR + 2);
+            if (i === 0) ctx.moveTo(hx, hy);
+            else ctx.lineTo(hx, hy);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // Rotating Outer Gold Halo
+          ctx.strokeStyle = 'rgba(253, 224, 71, 0.65)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(0, 0, pulseR + 6, 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (p.kind === 'OVERDRIVE') {
+          // Electric Hyper-Drive Core
+          ctx.fillStyle = '#6366F1';
+          ctx.strokeStyle = '#38BDF8';
           ctx.lineWidth = 2.5;
           ctx.beginPath();
           ctx.arc(p.x, p.y, pulseR, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
-        } else if (p.kind === 'OVERDRIVE') {
-          ctx.fillStyle = '#FDE047';
-          ctx.strokeStyle = '#FFFFFF';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, pulseR, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
         } else {
-          // Glowing Cyber Byte Cube
+          // Glowing Isometric Cyber Byte Cube
           ctx.translate(p.x, p.y);
-          ctx.fillStyle = 'rgba(14, 165, 233, 0.25)';
+          const cubeGrad = ctx.createLinearGradient(-pulseR, -pulseR, pulseR, pulseR);
+          cubeGrad.addColorStop(0, 'rgba(56, 189, 248, 0.45)');
+          cubeGrad.addColorStop(1, 'rgba(99, 102, 241, 0.35)');
+          ctx.fillStyle = cubeGrad;
           ctx.strokeStyle = '#38BDF8';
           ctx.lineWidth = 2;
           ctx.beginPath();
@@ -1028,7 +1018,7 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
           ctx.fill();
           ctx.stroke();
 
-          ctx.fillStyle = '#E0F2FE';
+          ctx.fillStyle = '#F0F9FF';
           ctx.font = 'bold 11px "JetBrains Mono", monospace';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
@@ -1037,21 +1027,22 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
         ctx.restore();
       });
 
-      // 5. Render Cyber Hazards
+      // 5. Render Cyber Hazards (Sleek High-Tech Crimson Firewalls)
       hazards.forEach((h) => {
         ctx.save();
         if (h.kind === 'SPINNER') {
+          // Rotating Laser Hazard Star
           const cx = h.x + h.w / 2;
           const cy = h.y + h.h / 2;
           ctx.translate(cx, cy);
           ctx.rotate(h.phase);
           const r = h.w / 2;
-          ctx.fillStyle = '#EC4899';
-          ctx.strokeStyle = '#FBCFE8';
+          ctx.fillStyle = '#DC2626';
+          ctx.strokeStyle = '#FCA5A5';
           ctx.lineWidth = 2;
           ctx.beginPath();
           for (let i = 0; i < 8; i++) {
-            const rad = i % 2 === 0 ? r : r * 0.48;
+            const rad = i % 2 === 0 ? r : r * 0.45;
             const ang = (i * Math.PI) / 4;
             if (i === 0) ctx.moveTo(Math.cos(ang) * rad, Math.sin(ang) * rad);
             else ctx.lineTo(Math.cos(ang) * rad, Math.sin(ang) * rad);
@@ -1059,32 +1050,52 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
           ctx.closePath();
           ctx.fill();
           ctx.stroke();
+
+          // Glowing Center Energy Core
+          ctx.fillStyle = '#FFFFFF';
+          ctx.beginPath();
+          ctx.arc(0, 0, 3, 0, Math.PI * 2);
+          ctx.fill();
         } else if (h.kind === 'SEEKER') {
+          // Stealth Cyber Drone
           const cx = h.x + h.w / 2;
           const cy = h.y + h.h / 2;
           ctx.translate(cx, cy);
-          ctx.fillStyle = '#A855F7';
-          ctx.strokeStyle = '#F3E8FF';
+          ctx.fillStyle = '#0F172A';
+          ctx.strokeStyle = '#EF4444';
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.moveTo(0, h.h / 2);
           ctx.lineTo(h.w / 2, -h.h / 2);
-          ctx.lineTo(0, -h.h * 0.25);
+          ctx.lineTo(0, -h.h * 0.2);
           ctx.lineTo(-h.w / 2, -h.h / 2);
           ctx.closePath();
           ctx.fill();
           ctx.stroke();
+
+          // Red Optical Sensor
+          ctx.fillStyle = '#EF4444';
+          ctx.beginPath();
+          ctx.arc(0, 0, 3, 0, Math.PI * 2);
+          ctx.fill();
         } else {
-          ctx.fillStyle = h.color;
-          ctx.strokeStyle = '#FFFFFF';
+          // Crimson Laser Firewall Barrier
+          const hazGrad = ctx.createLinearGradient(h.x, h.y, h.x, h.y + h.h);
+          hazGrad.addColorStop(0, '#EF4444');
+          hazGrad.addColorStop(0.6, '#B91C1C');
+          hazGrad.addColorStop(1, '#7F1D1D');
+
+          ctx.fillStyle = hazGrad;
+          ctx.strokeStyle = '#FCA5A5';
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           ctx.roundRect(h.x, h.y, h.w, h.h, 6);
           ctx.fill();
           ctx.stroke();
 
+          // Hazard Warning Stripe
           ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
-          ctx.fillRect(h.x + 6, h.y + h.h * 0.35, Math.max(4, h.w - 12), 4);
+          ctx.fillRect(h.x + 6, h.y + h.h * 0.35, Math.max(4, h.w - 12), 3);
         }
         ctx.restore();
       });
@@ -1093,8 +1104,8 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
       player.trail.forEach((t, idx) => {
         const ratio = (idx + 1) / player.trail.length;
         ctx.save();
-        ctx.globalAlpha = ratio * (t.dash ? 0.55 : 0.3);
-        ctx.fillStyle = t.dash ? '#38BDF8' : '#D4AF37';
+        ctx.globalAlpha = ratio * (t.dash ? 0.65 : 0.35);
+        ctx.fillStyle = t.dash ? '#00F2FE' : '#38BDF8';
         ctx.beginPath();
         ctx.arc(
           t.x,
@@ -1110,11 +1121,11 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
       // 7. Render Animated Byte Runner Cyber Sprinter Avatar
       ctx.save();
       if (armorActive) {
-        ctx.fillStyle = 'rgba(52, 211, 153, 0.16)';
-        ctx.strokeStyle = '#34D399';
-        ctx.lineWidth = 2;
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.18)';
+        ctx.strokeStyle = '#00F2FE';
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.arc(player.x, player.y, player.r + 12, 0, Math.PI * 2);
+        ctx.arc(player.x, player.y, player.r + 14, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
       }
@@ -1124,28 +1135,36 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
 
       const stride = Math.sin(player.runCycle) * 6;
 
-      // Animated Cyber Runner Thruster Boots (Left & Right Stride)
-      ctx.fillStyle = '#38BDF8';
+      // Animated Cyber Runner Thruster Boots with Dual Ion Flame Exhaust
+      ctx.fillStyle = '#0284C7';
       ctx.beginPath();
       ctx.roundRect(-10, 6 + stride, 6, 11, 3);
       ctx.roundRect(4, 6 - stride, 6, 11, 3);
       ctx.fill();
 
-      // Cyber Sprinter Suit Torso & Jetpack Shoulders
+      // Ion Flame Particles under boots
+      ctx.fillStyle = isOverdrive ? '#00F2FE' : '#38BDF8';
+      ctx.beginPath();
+      ctx.arc(-7, 18 + stride, 2.5, 0, Math.PI * 2);
+      ctx.arc(7, 18 - stride, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Cyber Sprinter Suit Torso — High-End Titanium Cobalt & Electric Cyan
       const suitGrad = ctx.createLinearGradient(0, -22, 0, 14);
-      suitGrad.addColorStop(0, '#FFFFFF');
-      suitGrad.addColorStop(0.4, isOverdrive ? '#38BDF8' : '#FDE047');
-      suitGrad.addColorStop(1, isOverdrive ? '#0284C7' : '#B8860B');
+      suitGrad.addColorStop(0, '#E0F2FE');
+      suitGrad.addColorStop(0.35, isOverdrive ? '#00F2FE' : '#38BDF8');
+      suitGrad.addColorStop(0.75, isOverdrive ? '#0284C7' : '#1D4ED8');
+      suitGrad.addColorStop(1, '#0F172A');
 
       ctx.fillStyle = suitGrad;
-      ctx.strokeStyle = '#FFFFFF';
+      ctx.strokeStyle = '#E0F2FE';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.roundRect(-14, -8, 28, 18, 7);
       ctx.fill();
       ctx.stroke();
 
-      // Swinging Cyber Arms
+      // Swinging Mecha Cyber Arms
       ctx.fillStyle = '#0F172A';
       ctx.strokeStyle = '#38BDF8';
       ctx.lineWidth = 1.5;
@@ -1155,19 +1174,19 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
       ctx.fill();
       ctx.stroke();
 
-      // Cyber Runner Helmet & Glowing Neon Visor
-      ctx.fillStyle = '#0F172A';
-      ctx.strokeStyle = '#FFFFFF';
+      // Cyber Runner Helmet & Glowing Electric Cyan Visor
+      ctx.fillStyle = '#0B1324';
+      ctx.strokeStyle = '#E0F2FE';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(0, -13, 10, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
-      // Glowing Visor Strip
-      ctx.fillStyle = isOverdrive ? '#38BDF8' : '#FDE047';
+      // Glowing Neon Laser Visor
+      ctx.fillStyle = isOverdrive ? '#00F2FE' : '#38BDF8';
       ctx.beginPath();
-      ctx.roundRect(-7, -17, 14, 5, 2.5);
+      ctx.roundRect(-7, -16, 14, 4.5, 2.5);
       ctx.fill();
 
       ctx.restore();
@@ -1261,16 +1280,8 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
           controlsRef.current.setTargetX(e.clientX);
         }}
         onPointerMove={(e) => {
-          if (!isDraggingRef.current || gameStateRef.current !== 'PLAYING') {
-            return;
-          }
-          if (
-            touchStartRef.current &&
-            touchStartRef.current.y - e.clientY > 48
-          ) {
-            controlsRef.current.dash();
-            touchStartRef.current = { x: e.clientX, y: e.clientY };
-          }
+          if (gameStateRef.current !== 'PLAYING') return;
+          // Ultra-smooth gliding across mobile touch and desktop mouse
           controlsRef.current.setTargetX(e.clientX);
         }}
         onPointerUp={() => {
@@ -1316,11 +1327,11 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
-          <div className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-black/85 backdrop-blur-md border border-white/20 flex items-center gap-1.5 font-mono">
-            <span className="text-[9px] sm:text-[10px] text-gray-400 uppercase">
+          <div className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-slate-950/85 backdrop-blur-md border border-cyan-500/30 flex items-center gap-1.5 font-mono shadow-[0_0_15px_rgba(6,182,212,0.12)]">
+            <span className="text-[9px] sm:text-[10px] text-gray-400 uppercase tracking-wider">
               Score
             </span>
-            <span className="text-sm sm:text-xl font-extrabold text-[#FDE047] tabular-nums">
+            <span className="text-sm sm:text-xl font-extrabold text-cyan-300 tabular-nums">
               {score}
             </span>
           </div>
@@ -1328,17 +1339,17 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
           <div
             className={`px-2 sm:px-3 py-1.5 rounded-xl border font-mono text-[11px] sm:text-xs font-extrabold transition ${
               combo >= 5
-                ? 'bg-sky-500/90 text-white border-sky-300'
+                ? 'bg-cyan-500/90 text-white border-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.4)]'
                 : combo > 1
-                ? 'bg-amber-400 text-gray-950 border-amber-200'
-                : 'bg-black/75 text-gray-300 border-white/15'
+                ? 'bg-indigo-600 text-white border-indigo-300'
+                : 'bg-slate-950/75 text-gray-300 border-white/15'
             }`}
           >
             {combo}x
           </div>
 
-          <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-black/75 border border-white/15 text-xs font-mono">
-            <Trophy className="w-3.5 h-3.5 text-[#D4AF37]" />
+          <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950/80 border border-white/15 text-xs font-mono">
+            <Trophy className="w-3.5 h-3.5 text-amber-400" />
             <span className="text-gray-400">Best:</span>
             <span className="font-bold text-white tabular-nums">{bestScore}</span>
           </div>
@@ -1346,11 +1357,11 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
           <div
             className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold ${
               shieldUnlocked || hasActiveArmor
-                ? 'bg-emerald-500/25 border-emerald-400/50 text-emerald-300'
-                : 'bg-black/75 border-white/15 text-gray-300'
+                ? 'bg-amber-500/20 border-amber-400/50 text-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.2)]'
+                : 'bg-slate-950/75 border-white/15 text-gray-300'
             }`}
           >
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
             <span>
               {shieldUnlocked
                 ? 'Gold Shield'
@@ -1364,10 +1375,10 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
             type="button"
             onClick={() => setSoundEnabled(!soundEnabled)}
             aria-label={soundEnabled ? 'Mute sound' : 'Unmute sound'}
-            className="p-2 rounded-xl bg-black/80 hover:bg-black border border-white/20 text-gray-200 transition"
+            className="p-2 rounded-xl bg-slate-950/80 hover:bg-slate-900 border border-white/20 text-gray-200 transition"
           >
             {soundEnabled ? (
-              <Volume2 className="w-4 h-4 text-[#FDE047]" />
+              <Volume2 className="w-4 h-4 text-cyan-400" />
             ) : (
               <VolumeX className="w-4 h-4 text-gray-400" />
             )}
@@ -1377,7 +1388,7 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
             type="button"
             onClick={toggleNativeFullscreen}
             aria-label="Toggle Fullscreen"
-            className="p-2 rounded-xl bg-black/80 hover:bg-black border border-white/20 text-gray-200 transition"
+            className="p-2 rounded-xl bg-slate-950/80 hover:bg-slate-900 border border-white/20 text-gray-200 transition"
           >
             {isFullscreen ? (
               <Minimize2 className="w-4 h-4" />
@@ -1388,87 +1399,48 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
         </div>
       </div>
 
-      {/* Start Game Screen Overlay — Added before game starts */}
+      {/* Start Game Screen Overlay — Very Simple, Just START (No text or instructions) */}
       {gameState === 'READY' && (
-        <div className="relative z-20 flex-1 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
-          <div className="max-w-md w-full bg-[#0B1324] border border-cyan-500/30 rounded-2xl p-6 sm:p-7 text-center space-y-4 sm:space-y-5 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 text-xs font-mono font-bold tracking-wide">
-              <Zap className="w-3.5 h-3.5 fill-cyan-400 text-cyan-400" />
-              <span>RETRO CYBER RUNNER</span>
-            </div>
+        <div className="relative z-20 flex-1 flex items-center justify-center p-4">
+          <div className="text-center space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <button
+              type="button"
+              onClick={() => controlsRef.current.start()}
+              className="group flex items-center justify-center gap-3 px-10 py-5 sm:px-14 sm:py-6 rounded-2xl bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-600 hover:from-cyan-300 hover:to-indigo-500 active:scale-95 text-white font-black text-xl sm:text-2xl tracking-wider shadow-[0_0_50px_rgba(6,182,212,0.45)] transition duration-200 cursor-pointer"
+            >
+              <Play className="w-7 h-7 sm:w-8 sm:h-8 fill-current transition group-hover:scale-110" />
+              <span>START</span>
+            </button>
 
-            <div className="space-y-1">
-              <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight uppercase">
-                Byte Runner
-              </h2>
-              <p className="text-xs sm:text-sm text-gray-300">
-                Sprint through data highways, collect byte cubes, and shield your streak!
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5 bg-black/60 border border-white/10 rounded-xl p-3 text-xs font-mono">
-              <div className="text-left">
-                <span className="text-gray-400 block text-[10px] uppercase">Goal</span>
-                <span className="text-emerald-400 font-bold">500 Pts = Gold Shield</span>
-              </div>
-              <div className="text-right">
-                <span className="text-gray-400 block text-[10px] uppercase">Best Score</span>
-                <span className="text-yellow-400 font-bold">{bestScore} pts</span>
-              </div>
-            </div>
-
-            <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-left space-y-1.5 text-xs text-gray-300">
-              <div className="font-bold text-white text-[11px] uppercase tracking-wider text-sky-400">
-                How to Play:
-              </div>
-              <div className="flex items-start gap-2 text-[11px]">
-                <span className="font-semibold text-white shrink-0">📱 Mobile:</span>
-                <span>Tap LEFT/RIGHT buttons below or swipe lanes. Tap Byte Dash to boost!</span>
-              </div>
-              <div className="flex items-start gap-2 text-[11px]">
-                <span className="font-semibold text-white shrink-0">💻 Laptop:</span>
-                <span>A / D or Arrow Keys to dodge · Space or Up Arrow to Dash</span>
-              </div>
-            </div>
-
-            <div className="pt-1 flex flex-col gap-2.5">
-              <button
-                type="button"
-                onClick={() => controlsRef.current.start()}
-                className="w-full flex items-center justify-center gap-2.5 px-8 py-4 rounded-xl bg-gradient-to-r from-[#38BDF8] via-sky-400 to-[#FDE047] hover:brightness-110 active:scale-95 text-gray-950 font-black text-base sm:text-lg tracking-wide transition shadow-xl cursor-pointer"
-              >
-                <Play className="w-5 h-5 fill-current" />
-                <span>START GAME</span>
-              </button>
-
-              {onExit && (
+            {onExit && (
+              <div>
                 <button
                   type="button"
                   onClick={onExit}
-                  className="py-2 text-xs text-gray-400 hover:text-white transition cursor-pointer"
+                  className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white transition cursor-pointer"
                 >
-                  Back to Syllabus
+                  Exit
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Game Over Overlay — Score is strictly frozen when out */}
+      {/* Game Over Overlay — Clean High-Tech Card */}
       {gameState === 'GAMEOVER' && (
-        <div className="relative z-20 flex-1 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="max-w-md w-full bg-[#0B1324] border border-white/20 rounded-2xl p-6 text-center space-y-5 shadow-2xl">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-sky-500/20 border border-sky-400/40 text-sky-300 text-xs font-mono font-bold">
+        <div className="relative z-20 flex-1 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-xl">
+          <div className="max-w-md w-full bg-gradient-to-b from-[#0B152B]/95 via-[#070E22]/95 to-[#040816]/98 border border-red-500/30 rounded-2xl p-6 text-center space-y-5 shadow-[0_0_50px_rgba(239,68,68,0.2)]">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-red-500/20 border border-red-400/40 text-red-300 text-xs font-mono font-bold">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>BYTE RUNNER COMPLETE</span>
+              <span>RUNNER OUT</span>
             </div>
 
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-              Runner Out!
+              Simulation Complete
             </h2>
 
-            <div className="grid grid-cols-2 gap-3 bg-black/50 border border-white/10 rounded-xl p-4 font-mono">
+            <div className="grid grid-cols-2 gap-3 bg-slate-950/70 border border-white/10 rounded-xl p-4 font-mono">
               <div>
                 <div className="text-[10px] text-gray-400 uppercase">
                   Final Score
@@ -1481,7 +1453,7 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
                 <div className="text-[10px] text-gray-400 uppercase">
                   Best Score
                 </div>
-                <div className="text-xl font-extrabold text-[#FDE047] tabular-nums">
+                <div className="text-xl font-extrabold text-cyan-300 tabular-nums">
                   {bestScore}
                 </div>
               </div>
@@ -1491,7 +1463,7 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
               <button
                 type="button"
                 onClick={() => controlsRef.current.restart()}
-                className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-[#38BDF8] hover:bg-sky-300 text-gray-950 font-extrabold text-sm tracking-wide transition active:scale-95"
+                className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-600 hover:from-cyan-300 hover:to-indigo-500 text-white font-extrabold text-sm tracking-wide transition active:scale-95 shadow-[0_0_25px_rgba(6,182,212,0.35)] cursor-pointer"
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>PLAY AGAIN</span>
@@ -1520,70 +1492,6 @@ export const ByteRunnerGame: React.FC<ByteRunnerProps> = ({
         </div>
       )}
 
-      {/* Bottom Ergonomic Mobile Full-Screen Thumb Controls */}
-      <div className="relative z-10 px-2.5 sm:px-6 pb-3 sm:pb-6 pt-2 bg-gradient-to-t from-black/95 via-black/60 to-transparent">
-        <div className="max-w-3xl mx-auto grid grid-cols-3 gap-2 sm:gap-4">
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              controlsRef.current.moveLeft();
-            }}
-            className="min-h-[48px] flex items-center justify-center gap-1 sm:gap-1.5 py-3.5 sm:py-4 px-2 sm:px-3 rounded-xl bg-[#0B2545]/95 hover:bg-[#13315C] border border-sky-400/40 active:scale-95 text-white font-extrabold text-xs sm:text-sm shadow-lg transition touch-manipulation whitespace-nowrap"
-          >
-            <ChevronLeft className="w-5 h-5 text-[#38BDF8] shrink-0" />
-            <span>LEFT</span>
-          </button>
-
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              if (gameState === 'READY') {
-                controlsRef.current.start();
-              } else if (gameState === 'GAMEOVER') {
-                controlsRef.current.restart();
-              } else {
-                controlsRef.current.dash();
-              }
-            }}
-            disabled={gameState === 'PLAYING' && dashReadyPct < 100}
-            className={`min-h-[48px] flex items-center justify-center gap-1 sm:gap-1.5 py-3.5 sm:py-4 px-2 sm:px-3 rounded-xl font-extrabold text-xs sm:text-sm shadow-lg transition active:scale-95 touch-manipulation whitespace-nowrap ${
-              gameState === 'READY'
-                ? 'bg-gradient-to-r from-[#38BDF8] via-sky-400 to-[#FDE047] text-gray-950 border border-sky-200'
-                : dashReadyPct >= 100
-                ? 'bg-gradient-to-r from-[#38BDF8] to-[#FDE047] text-gray-950 border border-sky-200'
-                : 'bg-black/75 text-gray-400 border border-white/15'
-            }`}
-          >
-            {gameState === 'READY' ? (
-              <>
-                <Play className="w-4 h-4 fill-current shrink-0" />
-                <span>START GAME</span>
-              </>
-            ) : (
-              <>
-                <Zap className="w-4 h-4 shrink-0" />
-                <span>
-                  {dashReadyPct >= 100 ? 'BYTE DASH' : `DASH ${dashReadyPct}%`}
-                </span>
-              </>
-            )}
-          </button>
-
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              controlsRef.current.moveRight();
-            }}
-            className="min-h-[48px] flex items-center justify-center gap-1 sm:gap-1.5 py-3.5 sm:py-4 px-2 sm:px-3 rounded-xl bg-[#0B2545]/95 hover:bg-[#13315C] border border-sky-400/40 active:scale-95 text-white font-extrabold text-xs sm:text-sm shadow-lg transition touch-manipulation whitespace-nowrap"
-          >
-            <span>RIGHT</span>
-            <ChevronRight className="w-5 h-5 text-[#38BDF8] shrink-0" />
-          </button>
-        </div>
-      </div>
     </div>
   );
 };

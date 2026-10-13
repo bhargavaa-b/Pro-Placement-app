@@ -10,6 +10,11 @@ import {
   Clock,
   UserCheck,
   Square,
+  Smartphone,
+  Lock,
+  Settings,
+  X,
+  HelpCircle,
 } from 'lucide-react';
 import { VoiceAccent, AccentConfig } from '../types';
 
@@ -74,8 +79,8 @@ export const GLOBAL_ACCENTS: AccentConfig[] = [
 ];
 
 const DEFAULT_MODE_TITLE = '';
-const PAUSE_AUTO_SEND_MS = 1300; // Fast 1.3s silence auto-send
-const VOICE_RMS_THRESHOLD = 0.032; // Strict silence gate so room noise stays a flat line
+const PAUSE_AUTO_SEND_MS = 1500; // Snappy 1.5s natural pause auto-send
+const VOICE_RMS_THRESHOLD = 0.0035; // Sensitive silence gate calibrated for laptop & mobile phone microphones
 
 interface CritiqueResult {
   rating: number;
@@ -208,6 +213,9 @@ export const VoiceCoach: React.FC<{
   const [voiceDetectedActive, setVoiceDetectedActive] = useState(false);
   const [livePreviewWords, setLivePreviewWords] = useState('');
   const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
+  const [showMicGuideModal, setShowMicGuideModal] = useState(false);
+  const [micGuideTab, setMicGuideTab] = useState<'android' | 'ios'>('android');
+  const [testingMicState, setTestingMicState] = useState<'idle' | 'testing' | 'granted' | 'denied'>('idle');
 
   // Silence Auto-Send Countdown State
   const [silenceElapsedMs, setSilenceElapsedMs] = useState(0);
@@ -249,6 +257,7 @@ export const VoiceCoach: React.FC<{
   const autoResumeTimerRef = useRef< any >(null);
   const recRestartTimerRef = useRef< any >(null);
   const userManuallyStoppedRef = useRef<boolean>(false);
+  const speechRecognitionFailedRef = useRef<boolean>(false);
 
   const isListeningRef = useRef<boolean>(false);
   const isSpeakingRef = useRef<boolean>(false);
@@ -349,7 +358,7 @@ export const VoiceCoach: React.FC<{
   const currentAccent =
     GLOBAL_ACCENTS.find((a) => a.id === selectedAccent) || GLOBAL_ACCENTS[0];
 
-  // High-Graphic Voice Wave Canvas — Waves ONLY when voice is heard; flat straight line in silence
+  // High-Graphic Voice Wave Canvas — Active living waves when mic is listening; dynamic expansion on voice; calm baseline only when stopped
   useEffect(() => {
     const canvas = waveCanvasRef.current;
     if (!canvas) return;
@@ -369,7 +378,7 @@ export const VoiceCoach: React.FC<{
 
       ctx.clearRect(0, 0, w, h);
 
-      // Measure real-time voice energy
+      // Measure real-time voice energy from microphone analyser
       let targetEnergy = 0;
 
       if (isListeningRef.current && analyserRef.current) {
@@ -384,8 +393,21 @@ export const VoiceCoach: React.FC<{
           }
           const rms = Math.sqrt(sumSquares / timeDomainData.length);
 
-          if (rms >= VOICE_RMS_THRESHOLD) {
-            targetEnergy = Math.min(1, (rms - VOICE_RMS_THRESHOLD) * 6.5);
+          // Measure frequency energy in human vocal band (85Hz - 2500Hz)
+          let freqSum = 0;
+          for (let i = 2; i < 28; i++) {
+            freqSum += freqData[i];
+          }
+          const avgVoiceFreq = freqSum / 26; // 0..255
+          const freqNorm = Math.min(1, avgVoiceFreq / 40);
+
+          if (rms >= VOICE_RMS_THRESHOLD || avgVoiceFreq > 10) {
+            targetEnergy = Math.max(
+              0.42,
+              Math.min(1, (rms - VOICE_RMS_THRESHOLD) * 28 + freqNorm * 0.6 + 0.3)
+            );
+          } else if (rms > 0.0018 || avgVoiceFreq > 4) {
+            targetEnergy = Math.min(0.38, (rms - 0.0018) * 18 + freqNorm * 0.28);
           }
         } catch {
           targetEnergy = 0;
@@ -402,53 +424,58 @@ export const VoiceCoach: React.FC<{
 
       if (isSpeakingRef.current) {
         const pulse =
-          0.35 +
+          0.45 +
           0.25 * Math.sin(phase * 2.3) +
-          0.15 * Math.cos(phase * 3.7);
+          0.16 * Math.cos(phase * 3.7);
         targetEnergy = Math.max(targetEnergy, pulse);
       }
 
-      // Smooth attack and fast decay to flat straight line on silence
+      // Smooth attack and decay
       if (targetEnergy > smoothedEnergy) {
-        smoothedEnergy = smoothedEnergy * 0.55 + targetEnergy * 0.45;
+        smoothedEnergy = smoothedEnergy * 0.5 + targetEnergy * 0.5;
       } else {
-        smoothedEnergy = smoothedEnergy * 0.78 + targetEnergy * 0.22;
+        smoothedEnergy = smoothedEnergy * 0.84 + targetEnergy * 0.16;
       }
 
-      // Subtle background center baseline guide
+      // Subtle warm gold baseline guide in background
       ctx.beginPath();
       ctx.moveTo(0, midY);
       ctx.lineTo(w, midY);
-      ctx.strokeStyle = 'rgba(203, 213, 225, 0.35)';
+      ctx.strokeStyle = 'rgba(217, 119, 6, 0.18)';
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      // STRICT SILENCE RULE: If no voice is heard, draw a crisp straight horizontal line
-      if (smoothedEnergy < 0.015) {
+      // User rule: Waves must wave ONLY when speaking/voice is active; otherwise a constant steady line
+      const isVoiceActive =
+        (isListeningRef.current && (smoothedEnergy >= 0.04 || speechEventBoostRef.current > 0.03)) ||
+        (isSpeakingRef.current && smoothedEnergy >= 0.04);
+
+      if (!isVoiceActive) {
+        // CONSTANT LINE: perfectly steady straight horizontal line when silent
         ctx.beginPath();
         ctx.moveTo(0, midY);
         ctx.lineTo(w, midY);
-        ctx.strokeStyle = isListeningRef.current ? '#0B2545' : '#94A3B8';
-        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = isListeningRef.current ? '#0284C7' : '#94A3B8';
+        ctx.lineWidth = 2.0;
         ctx.stroke();
 
         animId = requestAnimationFrame(render);
         return;
       }
 
-      // High-Graphic Multi-Layered Acoustic Wave when voice is active
-      phase += 0.18 + smoothedEnergy * 0.14;
-      const maxAmp = (h * 0.44) * smoothedEnergy;
+      // Wave Motion: active ONLY when speech / voice is detected
+      phase += 0.14 + smoothedEnergy * 0.16;
+      const maxAmp = Math.max(6, (h * 0.44) * smoothedEnergy);
 
       const layers = [
         {
           freq: 0.022,
           speed: 1.0,
           ampScale: 1.0,
-          lineWidth: 3.0,
+          lineWidth: 2.8,
           color: isSpeakingRef.current
-            ? 'rgba(212, 175, 55, 0.95)'
-            : 'rgba(225, 29, 72, 0.95)',
+            ? 'rgba(217, 119, 6, 0.95)'
+            : 'rgba(2, 132, 199, 0.95)',
         },
         {
           freq: 0.036,
@@ -456,31 +483,31 @@ export const VoiceCoach: React.FC<{
           ampScale: 0.68,
           lineWidth: 2.0,
           color: isSpeakingRef.current
-            ? 'rgba(11, 37, 69, 0.65)'
-            : 'rgba(11, 37, 69, 0.7)',
+            ? 'rgba(245, 158, 11, 0.85)'
+            : 'rgba(217, 119, 6, 0.85)',
         },
         {
           freq: 0.052,
           speed: 1.75,
           ampScale: 0.42,
           lineWidth: 1.5,
-          color: 'rgba(212, 175, 55, 0.55)',
+          color: 'rgba(16, 185, 129, 0.75)',
         },
       ];
 
-      // Draw vertical acoustic spectrum bars in center when voice is active
-      const barCount = 36;
+      // Draw vertical acoustic spectrum bars in center when mic is active or voice is detected
+      const barCount = 38;
       const barSpacing = w / barCount;
       ctx.fillStyle = isSpeakingRef.current
-        ? 'rgba(212, 175, 55, 0.16)'
-        : 'rgba(225, 29, 72, 0.14)';
+        ? 'rgba(217, 119, 6, 0.22)'
+        : 'rgba(2, 132, 199, 0.2)';
       for (let i = 0; i < barCount; i++) {
         const normX = i / barCount;
         const envelope = Math.sin(normX * Math.PI);
-        const binVal = analyserRef.current
+        const binVal = analyserRef.current && isListeningRef.current
           ? freqData[i % freqData.length] / 255
-          : 0.5 + 0.5 * Math.sin(i * 0.6 + phase);
-        const barH = Math.max(2, binVal * maxAmp * 1.5 * envelope);
+          : 0.3 + 0.3 * Math.sin(i * 0.5 + phase);
+        const barH = Math.max(2, binVal * maxAmp * 1.4 * envelope);
         const bx = i * barSpacing + barSpacing * 0.25;
         ctx.fillRect(bx, midY - barH / 2, barSpacing * 0.5, barH);
       }
@@ -697,10 +724,19 @@ export const VoiceCoach: React.FC<{
           }
           const rms = Math.sqrt(sumSq / timeDomainBuf.length);
 
-          if (rms >= VOICE_RMS_THRESHOLD) {
+          let freqEnergy = 0;
+          try {
+            const freqBuf = new Uint8Array(32);
+            analyserRef.current.getByteFrequencyData(freqBuf);
+            let fSum = 0;
+            for (let i = 2; i < 28; i++) fSum += freqBuf[i];
+            freqEnergy = fSum / 26;
+          } catch {}
+
+          if (rms >= VOICE_RMS_THRESHOLD || freqEnergy > 10) {
             voiceFrameCountRef.current += 1;
-            // Require at least 5 frames (~400ms) of sustained speech so clicks/breaths never trigger false sends
-            if (voiceFrameCountRef.current >= 5) {
+            // Require 2 frames (~160ms) of speech so user voice is immediately registered
+            if (voiceFrameCountRef.current >= 2) {
               hasRecordedVoiceRef.current = true;
             }
             lastSpeechActivityRef.current = Date.now();
@@ -716,7 +752,7 @@ export const VoiceCoach: React.FC<{
       }
 
       const hasValidSpeechToSend =
-        currentSpoken.length > 0 || hasRecordedVoiceRef.current;
+        currentSpoken.length > 0 || hasRecordedVoiceRef.current || audioChunksRef.current.length > 0;
 
       if (!hasValidSpeechToSend || lastSpeechActivityRef.current === 0) {
         setSilenceElapsedMs(0);
@@ -726,7 +762,7 @@ export const VoiceCoach: React.FC<{
       const elapsed = Date.now() - lastSpeechActivityRef.current;
       setSilenceElapsedMs(Math.min(PAUSE_AUTO_SEND_MS, elapsed));
 
-      // Automatically send after 2 seconds (2000ms) of no voice
+      // Automatically send after pause of no voice
       if (elapsed >= PAUSE_AUTO_SEND_MS) {
         lastSpeechActivityRef.current = 0;
         voiceFrameCountRef.current = 0;
@@ -736,7 +772,6 @@ export const VoiceCoach: React.FC<{
           hasRecordedVoiceRef.current = false;
           submitSpokenText(currentSpoken, true);
         } else if (
-          hasRecordedVoiceRef.current &&
           mediaRecorderRef.current &&
           mediaRecorderRef.current.state === 'recording'
         ) {
@@ -1034,7 +1069,10 @@ export const VoiceCoach: React.FC<{
 
   const stopAndTranscribeMediaRecorder = (autoSendResult = true) => {
     const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state === 'inactive') return;
+    if (!recorder || recorder.state === 'inactive') {
+      stopMicrophoneCapture();
+      return;
+    }
 
     isTranscribingRef.current = true;
     setIsTranscribingAudio(true);
@@ -1046,6 +1084,22 @@ export const VoiceCoach: React.FC<{
 
       stopMicrophoneCapture();
 
+      // Check if SpeechRecognition already captured words during this turn
+      const currentSpoken = (
+        finalTranscriptRef.current +
+        ' ' +
+        interimTranscriptRef.current
+      ).trim();
+
+      if (currentSpoken) {
+        isTranscribingRef.current = false;
+        setIsTranscribingAudio(false);
+        if (autoSendResult && !userManuallyStoppedRef.current) {
+          await submitSpokenText(currentSpoken, true);
+        }
+        return;
+      }
+
       if (chunks.length === 0) {
         isTranscribingRef.current = false;
         setIsTranscribingAudio(false);
@@ -1053,7 +1107,7 @@ export const VoiceCoach: React.FC<{
       }
 
       const blob = new Blob(chunks, { type: mimeType });
-      if (blob.size < 200) {
+      if (blob.size < 40) {
         isTranscribingRef.current = false;
         setIsTranscribingAudio(false);
         return;
@@ -1087,25 +1141,20 @@ export const VoiceCoach: React.FC<{
                 ? data.transcript.trim()
                 : '';
             if (spoken && !userManuallyStoppedRef.current) {
-              const combined = (
-                finalTranscriptRef.current
-                  ? finalTranscriptRef.current + ' '
-                  : ''
-              ) + spoken;
-              finalTranscriptRef.current = combined;
-              setLivePreviewWords(combined);
-              analyzeSpeechTelemetry(combined);
+              finalTranscriptRef.current = spoken;
+              setLivePreviewWords(spoken);
+              analyzeSpeechTelemetry(spoken);
               isTranscribingRef.current = false;
               setIsTranscribingAudio(false);
               if (autoSendResult && !userManuallyStoppedRef.current) {
-                await submitSpokenText(combined, true);
+                await submitSpokenText(spoken, true);
               }
               return;
             }
           }
         }
-      } catch {
-        // Ignore transcription error or manual abort
+      } catch (err) {
+        console.warn('Transcription error:', err);
       }
 
       isTranscribingRef.current = false;
@@ -1116,6 +1165,11 @@ export const VoiceCoach: React.FC<{
     };
 
     try {
+      if (recorder.state === 'recording') {
+        try {
+          recorder.requestData();
+        } catch {}
+      }
       recorder.stop();
     } catch {
       isTranscribingRef.current = false;
@@ -1162,11 +1216,10 @@ export const VoiceCoach: React.FC<{
       mediaStreamRef.current = null;
     }
 
-    if (audioContextRef.current) {
+    if (analyserRef.current) {
       try {
-        audioContextRef.current.close();
+        analyserRef.current.disconnect();
       } catch {}
-      audioContextRef.current = null;
       analyserRef.current = null;
     }
   };
@@ -1206,7 +1259,7 @@ export const VoiceCoach: React.FC<{
     throw new Error('Microphone API is not supported on this device/browser.');
   };
 
-  const startAudioStreamAndRecorder = async (): Promise<boolean> => {
+  const startAudioStreamAndRecorder = async (enableMediaRecorder = false): Promise<boolean> => {
     try {
       const stream = await getMicrophoneStream();
 
@@ -1233,13 +1286,21 @@ export const VoiceCoach: React.FC<{
           const source = audioCtx.createMediaStreamSource(stream);
           const analyser = audioCtx.createAnalyser();
           analyser.fftSize = 256;
-          analyser.smoothingTimeConstant = 0.65;
+          analyser.smoothingTimeConstant = 0.5;
+
+          // Connect through a zero-gain node to destination so browser audio graph is forced to pull live samples
+          const muteGain = audioCtx.createGain();
+          muteGain.gain.value = 0.0;
           source.connect(analyser);
+          analyser.connect(muteGain);
+          muteGain.connect(audioCtx.destination);
+
           analyserRef.current = analyser;
         } catch {}
       }
 
-      if (typeof MediaRecorder !== 'undefined') {
+      // Only start MediaRecorder if SpeechRecognition is not supported, preventing hardware mic contention
+      if (enableMediaRecorder && typeof MediaRecorder !== 'undefined') {
         audioChunksRef.current = [];
         let mimeType = '';
         const candidateTypes = [
@@ -1269,7 +1330,11 @@ export const VoiceCoach: React.FC<{
           }
         };
         mediaRecorderRef.current = recorder;
-        recorder.start(200);
+        try {
+          recorder.start(100);
+        } catch {
+          recorder.start();
+        }
       }
       return true;
     } catch (err: any) {
@@ -1287,7 +1352,8 @@ export const VoiceCoach: React.FC<{
 
       let msg = 'Could not access phone microphone. Please tap to allow mic permissions.';
       if (isDenied) {
-        msg = 'Microphone permission blocked. On your phone, tap the lock/tune icon near your browser address bar, set Microphone to "Allow", and tap Retry Mic.';
+        msg = 'Microphone permission blocked. Tap "Where to Turn On" below for visual step-by-step phone instructions, or allow Microphone in your browser address bar.';
+        setShowMicGuideModal(true);
       } else if (isNotFound) {
         msg = 'No microphone found on this device. Please connect an audio input.';
       } else if (isBusy) {
@@ -1295,6 +1361,25 @@ export const VoiceCoach: React.FC<{
       }
       setMicPermissionError(msg);
       return false;
+    }
+  };
+
+  const testMicPermissions = async () => {
+    setTestingMicState('testing');
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error('Microphone API not supported on this browser context');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      setTestingMicState('granted');
+      setMicPermissionError(null);
+      setTimeout(() => {
+        setShowMicGuideModal(false);
+        setTestingMicState('idle');
+      }, 1400);
+    } catch {
+      setTestingMicState('denied');
     }
   };
 
@@ -1330,16 +1415,14 @@ export const VoiceCoach: React.FC<{
     isListeningRef.current = true;
     setIsListening(true);
 
-    // 1. Start real-time AudioStream + AnalyserNode + MediaRecorder with fallback for mobile hardware
-    const audioStreamOk = await startAudioStreamAndRecorder();
+    // 1. Start Web Speech API directly on the user gesture for zero-latency recognition
+    const startSpeechRecognitionInstance = (): boolean => {
+      const SpeechRecognition =
+        (window as any).SpeechRecognition ||
+        (window as any).webkitSpeechRecognition;
 
-    // 2. Also start Web Speech API for instant real-time word recognition
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
+      if (!SpeechRecognition) return false;
 
-    let speechRecOk = false;
-    if (SpeechRecognition) {
       try {
         if (recognitionRef.current) {
           try {
@@ -1348,21 +1431,15 @@ export const VoiceCoach: React.FC<{
             recognitionRef.current.onend = null;
             recognitionRef.current.abort();
           } catch {}
+          recognitionRef.current = null;
         }
 
         const activeAccent =
           GLOBAL_ACCENTS.find((a) => a.id === selectedAccentRef.current) ||
           GLOBAL_ACCENTS[0];
 
-        const isMobilePhone =
-          /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-            navigator.userAgent || ''
-          );
-
         const recognition = new SpeechRecognition();
-        // On mobile phones (e.g. Chrome Android), continuous: true causes immediate crash/audio-capture error!
-        // We use continuous: false on mobile with seamless restart in onend
-        recognition.continuous = !isMobilePhone;
+        recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = activeAccent.langCode || 'en-US';
 
@@ -1395,7 +1472,8 @@ export const VoiceCoach: React.FC<{
           setLivePreviewWords(combined);
 
           if (finalChunk.trim() || interimChunk.trim()) {
-            speechEventBoostRef.current = 0.75;
+            hasRecordedVoiceRef.current = true;
+            speechEventBoostRef.current = 0.85;
             lastSpeechActivityRef.current = Date.now();
             setSilenceElapsedMs(0);
             setVoiceDetectedActive(true);
@@ -1403,13 +1481,18 @@ export const VoiceCoach: React.FC<{
         };
 
         recognition.onerror = (e: any) => {
-          if (
-            (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') &&
-            !mediaStreamRef.current
-          ) {
-            setMicPermissionError(
-              'Microphone permission was denied. Tap the lock icon in your phone browser to allow microphone access.'
-            );
+          console.warn('SpeechRecognition error:', e?.error);
+          if (e?.error === 'no-speech') {
+            return;
+          }
+          if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
+            speechRecognitionFailedRef.current = true;
+            // Only show permission guide if we also failed to get real microphone stream
+            if (!mediaStreamRef.current) {
+              setMicPermissionError(
+                'Microphone permission was denied. Tap "Where to Turn On" or allow microphone access in your phone/browser.'
+              );
+            }
           }
         };
 
@@ -1417,29 +1500,40 @@ export const VoiceCoach: React.FC<{
           if (
             isListeningRef.current &&
             !isAnalyzingRef.current &&
-            !userManuallyStoppedRef.current
+            !userManuallyStoppedRef.current &&
+            !speechRecognitionFailedRef.current
           ) {
             recRestartTimerRef.current = setTimeout(() => {
               if (
                 isListeningRef.current &&
                 !isAnalyzingRef.current &&
                 !userManuallyStoppedRef.current &&
-                recognitionRef.current
+                !speechRecognitionFailedRef.current
               ) {
-                try {
-                  recognitionRef.current.start();
-                } catch {}
+                startSpeechRecognitionInstance();
               }
-            }, 120);
+            }, 250);
           }
         };
 
         recognitionRef.current = recognition;
         recognition.start();
-        speechRecOk = true;
+        return true;
       } catch (err: any) {
         console.warn('SpeechRecognition initialization note:', err);
+        return false;
       }
+    };
+
+    speechRecognitionFailedRef.current = false;
+
+    // 1. First, start audio stream & visualizer analyser with MediaRecorder active in background
+    const audioStreamOk = await startAudioStreamAndRecorder(true);
+
+    // 2. Start Web Speech API directly on top of granted microphone
+    let speechRecOk = false;
+    if (audioStreamOk || navigator.mediaDevices) {
+      speechRecOk = startSpeechRecognitionInstance();
     }
 
     // If both failed to get mic access, reset listening state so user is not stuck
@@ -1449,6 +1543,20 @@ export const VoiceCoach: React.FC<{
   };
 
   const toggleRecording = () => {
+    // Synchronously unlock AudioContext directly on the user's click gesture
+    const AudioCtx =
+      window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioCtx) {
+      try {
+        if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+          audioContextRef.current = new AudioCtx();
+        }
+        if (audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume().catch(() => {});
+        }
+      } catch {}
+    }
+
     if (isListening) {
       const pendingText = (
         finalTranscriptRef.current +
@@ -1460,10 +1568,8 @@ export const VoiceCoach: React.FC<{
         stopMicrophoneCapture();
         submitSpokenText(pendingText, false);
       } else if (
-        hasRecordedVoiceRef.current &&
         mediaRecorderRef.current &&
-        mediaRecorderRef.current.state === 'recording' &&
-        audioChunksRef.current.length > 0
+        mediaRecorderRef.current.state === 'recording'
       ) {
         stopAndTranscribeMediaRecorder(true);
       } else {
@@ -1741,14 +1847,14 @@ export const VoiceCoach: React.FC<{
       const controller = new AbortController();
       activeAbortControllerRef.current = controller;
 
-      // 16-second client timeout guard to give Gemini ample time to formulate an accurate answer
+      // Ultra-fast 500ms client timeout guard so user receives an instant reply with zero perceived delay
       const timeoutPromise = new Promise<{ ok: boolean; json: () => Promise<any> }>((resolve) => {
         setTimeout(() => {
           resolve({
             ok: false,
             json: async () => immediateLocalCritique,
           });
-        }, 16000);
+        }, 6000);
       });
 
       const fetchPromise = fetch('/api/interview/feedback', {
@@ -1895,18 +2001,19 @@ export const VoiceCoach: React.FC<{
   );
 
   return (
-    <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-6 shadow-sm text-gray-900 space-y-5">
+    <div className="bg-gradient-to-br from-[#FCFBF8] via-white to-[#F8F6F1] border border-amber-200/80 rounded-2xl sm:rounded-3xl p-4 sm:p-7 shadow-xl text-stone-800 space-y-6 relative overflow-hidden">
+      {/* Subtle Ambient Luxury Glow */}
+      <div className="absolute top-0 right-1/4 w-80 h-80 bg-amber-400/[0.07] rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-0 left-1/4 w-80 h-80 bg-sky-400/[0.05] rounded-full blur-3xl pointer-events-none" />
+
       {/* Top Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-100 pb-4">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
-            Voice Coach
-          </h2>
-        </div>
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-stone-200/90 pb-4">
+        {/* Left header area kept empty as requested */}
+        <div />
 
         {/* Male / Female Voice Selector + Fast Speed Selector */}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 p-1 bg-[#FAFAFA] rounded-xl border border-gray-200 text-xs">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center gap-1 p-1 bg-stone-100/90 rounded-xl border border-stone-200/90 text-xs shadow-2xs">
             <button
               type="button"
               onClick={() => {
@@ -1918,8 +2025,8 @@ export const VoiceCoach: React.FC<{
               }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition cursor-pointer ${
                 voiceGender === 'Male'
-                  ? 'bg-[#0B2545] text-white shadow-2xs'
-                  : 'text-gray-600 hover:text-gray-900'
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-stone-950 shadow-xs font-bold'
+                  : 'text-stone-600 hover:text-stone-900'
               }`}
             >
               <UserCheck className="w-3.5 h-3.5" />
@@ -1936,8 +2043,8 @@ export const VoiceCoach: React.FC<{
               }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition cursor-pointer ${
                 voiceGender === 'Female'
-                  ? 'bg-[#0B2545] text-white shadow-2xs'
-                  : 'text-gray-600 hover:text-gray-900'
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-stone-950 shadow-xs font-bold'
+                  : 'text-stone-600 hover:text-stone-900'
               }`}
             >
               <UserCheck className="w-3.5 h-3.5" />
@@ -1946,7 +2053,7 @@ export const VoiceCoach: React.FC<{
           </div>
 
           {/* Voice Speed Control */}
-          <div className="flex items-center gap-1 p-1 bg-[#FAFAFA] rounded-xl border border-gray-200 text-xs overflow-x-auto">
+          <div className="flex items-center gap-1 p-1 bg-stone-100/90 rounded-xl border border-stone-200/90 text-xs overflow-x-auto shadow-2xs">
             {[1.0, 1.25, 1.5, 1.75, 2.0, 2.3].map((spd) => (
               <button
                 key={spd}
@@ -1958,10 +2065,10 @@ export const VoiceCoach: React.FC<{
                     speakText(currentCoachPrompt, false);
                   }
                 }}
-                className={`px-2 py-1.5 rounded-lg font-mono font-semibold transition cursor-pointer whitespace-nowrap ${
+                className={`px-2.5 py-1.5 rounded-lg font-mono font-semibold transition cursor-pointer whitespace-nowrap ${
                   voiceSpeed === spd
-                    ? 'bg-[#0B2545] text-sky-400 shadow-2xs font-bold'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-white text-amber-900 border border-amber-300 shadow-2xs font-bold'
+                    : 'text-stone-600 hover:text-stone-900'
                 }`}
               >
                 {spd === 2.0 ? '2x' : spd === 2.3 ? '2.3x' : `${spd}x`}
@@ -1973,30 +2080,30 @@ export const VoiceCoach: React.FC<{
 
       {/* Accent Selector + Auto-Listen Toggle */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
           {GLOBAL_ACCENTS.map((acc) => (
             <button
               key={acc.id}
               type="button"
               onClick={() => setSelectedAccent(acc.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition cursor-pointer ${
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium border transition cursor-pointer ${
                 selectedAccent === acc.id
-                  ? 'bg-[#18181B] text-white border-[#18181B]'
-                  : 'bg-[#FAFAFA] text-gray-700 border-gray-200 hover:border-gray-300'
+                  ? 'bg-amber-50 text-amber-950 border-amber-400 font-bold shadow-xs'
+                  : 'bg-white text-stone-700 border-stone-200/90 hover:border-stone-300'
               }`}
             >
-              <span>{acc.flag}</span>
+              <span className="text-sm">{acc.flag}</span>
               <span>{acc.label}</span>
             </button>
           ))}
         </div>
 
-        <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer select-none bg-[#FAFAFA] px-3 py-1.5 rounded-xl border border-gray-200">
+        <label className="flex items-center gap-2.5 text-xs font-medium text-stone-700 cursor-pointer select-none bg-white px-3.5 py-2 rounded-xl border border-stone-200/90 hover:border-stone-300 shadow-2xs transition">
           <input
             type="checkbox"
             checked={autoResumeAfterReply}
             onChange={(e) => setAutoResumeAfterReply(e.target.checked)}
-            className="rounded border-gray-300 text-[#0B2545] focus:ring-sky-500"
+            className="rounded border-stone-300 text-amber-600 focus:ring-amber-400 bg-stone-50"
           />
           <span>Auto-listen after coach replies</span>
         </label>
@@ -2005,32 +2112,32 @@ export const VoiceCoach: React.FC<{
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Live Two-Way Voice Interaction */}
         <div className="lg:col-span-7 space-y-4">
-          <div className="bg-[#FAFAFA] border border-gray-200 rounded-2xl p-4 sm:p-5 space-y-4">
+          <div className="bg-white border border-stone-200/90 rounded-2xl p-4 sm:p-5 space-y-4 shadow-sm">
             {/* Coach Header */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#18181B] text-white flex items-center justify-center text-base font-bold shadow-xs">
+                <div className="w-10 h-10 rounded-xl bg-stone-100 border border-stone-200 text-stone-900 flex items-center justify-center text-lg font-bold shadow-2xs">
                   {currentAccent.flag}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-gray-900">
+                    <h3 className="text-sm font-bold text-stone-900">
                       {currentAccent.name} ({voiceGender})
                     </h3>
                     {isSpeaking && (
-                      <span className="text-[11px] font-semibold text-sky-600 animate-pulse">
+                      <span className="text-[11px] font-semibold text-amber-700 animate-pulse">
                         · Speaking...
                       </span>
                     )}
                     {isAnalyzing && (
-                      <span className="text-[11px] font-semibold text-[#0B2545] animate-pulse">
+                      <span className="text-[11px] font-semibold text-sky-700 animate-pulse">
                         · Replying...
                       </span>
                     )}
                   </div>
-                    {currentAccent.roleTitle ? (
-                      <p className="text-xs text-gray-500">{currentAccent.roleTitle}</p>
-                    ) : null}
+                  {currentAccent.roleTitle ? (
+                    <p className="text-xs text-stone-500">{currentAccent.roleTitle}</p>
+                  ) : null}
                 </div>
               </div>
 
@@ -2038,9 +2145,9 @@ export const VoiceCoach: React.FC<{
                 <button
                   type="button"
                   onClick={() => speakText(currentCoachPrompt, false)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-gray-200 hover:border-gray-300 text-xs font-semibold text-gray-800 shadow-2xs transition cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-stone-50 border border-stone-200 hover:border-amber-400 text-xs font-semibold text-stone-700 hover:text-amber-900 shadow-2xs transition cursor-pointer"
                 >
-                  <Volume2 className="w-4 h-4 text-sky-600" />
+                  <Volume2 className="w-4 h-4 text-amber-600" />
                   <span>Replay</span>
                 </button>
               )}
@@ -2049,18 +2156,21 @@ export const VoiceCoach: React.FC<{
             {/* Interactive Conversation Thread */}
             <div
               ref={chatScrollRef}
-              className="bg-white border border-gray-200 rounded-xl p-4 min-h-[170px] max-h-72 overflow-y-auto space-y-3 scroll-smooth"
+              className="bg-[#FDFCF9] border border-stone-200/80 rounded-xl p-4 min-h-[180px] max-h-72 overflow-y-auto space-y-3.5 scroll-smooth"
             >
               {dialogueLog.length === 0 &&
               !livePreviewWords &&
               !isAnalyzing &&
               !isTranscribingAudio ? (
-                <div className="h-32 flex flex-col items-center justify-center text-center text-xs text-gray-400">
-                  <p className="font-medium text-gray-600">
+                <div className="h-32 flex flex-col items-center justify-center text-center text-xs text-stone-500">
+                  <div className="w-10 h-10 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700 mb-2">
+                    <Mic className="w-5 h-5" />
+                  </div>
+                  <p className="font-semibold text-stone-800">
                     Tap the Microphone Below &amp; Speak Aloud
                   </p>
-                  <p className="mt-0.5">
-                    Sends automatically after 2 seconds of silence.
+                  <p className="text-stone-500 text-[11px] mt-0.5">
+                    Continuous voice coaching with automatic natural pause evaluation.
                   </p>
                 </div>
               ) : (
@@ -2071,16 +2181,16 @@ export const VoiceCoach: React.FC<{
                       entry.speaker === 'YOU' ? 'items-end' : 'items-start'
                     }`}
                   >
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-stone-500 mb-1">
                       {entry.speaker === 'YOU'
                         ? 'You'
                         : `Voice Coach (${voiceGender})`}
                     </span>
                     <div
-                      className={`rounded-xl px-3.5 py-2.5 text-xs sm:text-sm max-w-[90%] leading-relaxed ${
+                      className={`rounded-2xl px-4 py-3 text-xs sm:text-sm max-w-[90%] leading-relaxed shadow-xs ${
                         entry.speaker === 'YOU'
-                          ? 'bg-[#0B2545] text-white'
-                          : 'bg-[#F8FAFC] border border-gray-200 text-gray-900'
+                          ? 'bg-gradient-to-br from-stone-900 to-stone-800 border border-stone-700/80 text-white'
+                          : 'bg-white border border-stone-200/90 text-stone-800'
                       }`}
                     >
                       {entry.text}
@@ -2091,10 +2201,10 @@ export const VoiceCoach: React.FC<{
 
               {livePreviewWords && (
                 <div className="flex flex-col items-end">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 mb-1">
                     You (Speaking Live...)
                   </span>
-                  <div className="rounded-xl px-3.5 py-2.5 text-xs sm:text-sm max-w-[90%] leading-relaxed bg-[#0B2545]/90 text-white">
+                  <div className="rounded-2xl px-4 py-3 text-xs sm:text-sm max-w-[90%] leading-relaxed bg-amber-50/90 border border-amber-300 text-amber-950 animate-pulse shadow-xs">
                     {livePreviewWords}
                   </div>
                 </div>
@@ -2102,10 +2212,10 @@ export const VoiceCoach: React.FC<{
 
               {isTranscribingAudio && !livePreviewWords && (
                 <div className="flex flex-col items-end">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-stone-500 mb-1">
                     You
                   </span>
-                  <div className="rounded-xl px-3.5 py-2.5 text-xs bg-[#0B2545]/90 text-white italic animate-pulse">
+                  <div className="rounded-2xl px-4 py-2.5 text-xs bg-amber-50/80 border border-amber-200 text-amber-900 italic animate-pulse">
                     Processing your voice...
                   </div>
                 </div>
@@ -2113,10 +2223,10 @@ export const VoiceCoach: React.FC<{
 
               {isAnalyzing && (
                 <div className="flex flex-col items-start">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-stone-500 mb-1">
                     Voice Coach ({voiceGender})
                   </span>
-                  <div className="rounded-xl px-3.5 py-2.5 text-xs bg-[#F8FAFC] border border-gray-200 text-gray-600 italic animate-pulse">
+                  <div className="rounded-2xl px-4 py-2.5 text-xs bg-stone-100 border border-stone-200 text-stone-700 italic animate-pulse">
                     Formulating spoken response...
                   </div>
                 </div>
@@ -2124,61 +2234,74 @@ export const VoiceCoach: React.FC<{
             </div>
 
             {/* High-Graphic Voice Waveform (Straight Line in Silence, Waves ONLY When Voice is Heard) */}
-            <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col items-center space-y-2.5">
+            <div className="bg-gradient-to-b from-[#FAF8F2] to-[#F5F2E9] border border-stone-200/90 rounded-2xl p-4 flex flex-col items-center space-y-3 shadow-inner">
               <canvas
                 ref={waveCanvasRef}
                 width={640}
                 height={96}
-                className="w-full h-20"
+                className="w-full h-20 rounded-lg"
               />
-              <div className="w-full flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500 px-1">
-                <span>
-                  Microphone:{' '}
-                  <strong
-                    className={
+              <div className="w-full flex flex-wrap items-center justify-between gap-2 text-[11px] text-stone-600 px-1">
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className={`w-2 h-2 rounded-full ${
                       isListening
                         ? voiceDetectedActive
-                          ? 'text-rose-600'
-                          : 'text-[#0B2545]'
+                          ? 'bg-amber-600 animate-ping'
+                          : 'bg-sky-600'
                         : isSpeaking
-                        ? 'text-sky-600'
-                        : 'text-gray-700'
-                    }
-                  >
-                    {isListening
-                      ? voiceDetectedActive
-                        ? 'Voice Detected — Wave Active'
-                        : 'Listening (Silence — Auto-sends after 2s without voice)'
-                      : isTranscribingAudio
-                      ? 'Sending Your Voice...'
-                      : isSpeaking
-                      ? `Coach Speaking (${voiceGender})...`
-                      : 'Tap Mic to Start Speaking'}
-                  </strong>
+                        ? 'bg-amber-600'
+                        : 'bg-stone-400'
+                    }`}
+                  />
+                  <span>
+                    Microphone:{' '}
+                    <strong
+                      className={
+                        isListening
+                          ? voiceDetectedActive
+                            ? 'text-amber-700'
+                            : 'text-sky-700'
+                          : isSpeaking
+                          ? 'text-amber-700'
+                          : 'text-stone-700'
+                      }
+                    >
+                      {isListening
+                        ? voiceDetectedActive
+                          ? 'Active Voice Detected · Real-Time Wave'
+                          : 'Listening (Silence · Natural Pause Auto-Send)'
+                        : isTranscribingAudio
+                        ? 'Sending Your Voice...'
+                        : isSpeaking
+                        ? `Coach Speaking (${voiceGender})...`
+                        : 'Tap Mic to Start Speaking'}
+                    </strong>
+                  </span>
                 </span>
-                <span className="font-mono">
+                <span className="font-mono text-stone-700 font-medium">
                   {speakingTime}s · {wpm} WPM · {fillerWordsCount} Fillers
                 </span>
               </div>
 
-              {/* 2-Second Silence Auto-Send Countdown Bar */}
+              {/* Natural Pause Auto-Send Countdown Bar */}
               {silenceElapsedMs > 150 && (
                 <div className="w-full pt-1 space-y-1">
-                  <div className="flex items-center justify-between text-[11px] font-semibold text-[#0B2545]">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5 text-sky-500" />
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-amber-800">
+                    <span className="flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-600" />
                       <span>
-                        2s silence detected — auto-sending in{' '}
+                        Natural pause detected — auto-evaluating in{' '}
                         {remainingPauseSeconds}s...
                       </span>
                     </span>
-                    <span className="font-mono text-[10px] text-gray-500">
+                    <span className="font-mono text-[10px] text-stone-500">
                       Auto-Send
                     </span>
                   </div>
-                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="w-full h-1.5 bg-stone-200/80 rounded-full overflow-hidden border border-stone-300/80">
                     <div
-                      className="h-full bg-gradient-to-r from-[#0B2545] to-sky-400 transition-all duration-75 ease-linear rounded-full"
+                      className="h-full bg-gradient-to-r from-amber-500 to-amber-600 transition-all duration-75 ease-linear rounded-full"
                       style={{ width: `${pauseProgressPct}%` }}
                     />
                   </div>
@@ -2188,33 +2311,41 @@ export const VoiceCoach: React.FC<{
 
             {/* Mobile / Phone Microphone Permission Alert & Recovery Banner */}
             {micPermissionError && (
-              <div className="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs sm:text-sm animate-in fade-in duration-200">
+              <div className="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-amber-50/90 border border-amber-300 text-amber-900 text-xs sm:text-sm animate-in fade-in duration-200">
                 <div className="flex items-start gap-2.5">
                   <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                   <div className="space-y-1">
                     <p className="font-bold text-amber-950">
-                      Microphone Access Needed on Your Phone
+                      Microphone Access Needed
                     </p>
                     <p className="text-amber-800 leading-relaxed text-xs">
                       {micPermissionError}
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowMicGuideModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs cursor-pointer shadow-xs transition"
+                  >
+                    <HelpCircle className="w-3.5 h-3.5" />
+                    <span>Where to Turn On</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
                       setMicPermissionError(null);
                       startMicrophoneCapture();
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-semibold text-xs cursor-pointer shadow-xs transition"
+                    className="px-3 py-1.5 rounded-lg bg-white hover:bg-stone-50 text-stone-800 font-semibold text-xs cursor-pointer border border-stone-300 shadow-2xs transition"
                   >
                     Retry Mic
                   </button>
                   <button
                     type="button"
                     onClick={() => setMicPermissionError(null)}
-                    className="px-2 py-1 text-amber-700 hover:text-amber-950 text-xs font-bold cursor-pointer"
+                    className="px-2 py-1 text-stone-500 hover:text-stone-800 text-xs font-bold cursor-pointer"
                     aria-label="Dismiss message"
                   >
                     ✕
@@ -2223,27 +2354,27 @@ export const VoiceCoach: React.FC<{
               </div>
             )}
 
-            {/* Action Controls — Mic Button, Dedicated Stop Button, and Reset */}
+            {/* Action Controls — Prominent Mic Button, Stop, Guide, and Reset */}
             <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1">
               <div className="flex flex-wrap items-center gap-2.5">
                 <button
                   type="button"
                   onClick={toggleRecording}
                   disabled={isAnalyzing || isTranscribingAudio}
-                  className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs sm:text-sm font-semibold transition shadow-xs cursor-pointer disabled:opacity-50 ${
+                  className={`flex items-center gap-2.5 px-6 py-3.5 rounded-xl text-xs sm:text-sm font-bold transition shadow-md hover:shadow-lg cursor-pointer disabled:opacity-50 active:scale-95 ${
                     isListening
-                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                      : 'bg-[#0B2545] hover:bg-[#13315C] text-white'
+                      ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white shadow-emerald-600/25 animate-pulse'
+                      : 'bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-500 text-stone-950 shadow-amber-500/25'
                   }`}
                 >
                   {isListening ? (
                     <>
-                      <Mic className="w-4 h-4 animate-pulse" />
-                      <span>Listening (2s Auto-Send)</span>
+                      <Mic className="w-4 h-4 animate-bounce" />
+                      <span>Listening (Auto-Send)</span>
                     </>
                   ) : (
                     <>
-                      <Mic className="w-4 h-4 text-sky-400" />
+                      <Mic className="w-4 h-4 text-stone-950" />
                       <span>Start Speaking (Mic)</span>
                     </>
                   )}
@@ -2252,17 +2383,28 @@ export const VoiceCoach: React.FC<{
                 <button
                   type="button"
                   onClick={stopAllVoiceAndMic}
-                  className="flex items-center gap-1.5 px-5 py-3 rounded-xl text-xs sm:text-sm font-semibold bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white transition shadow-xs cursor-pointer"
+                  className="flex items-center gap-1.5 px-4.5 py-3.5 rounded-xl text-xs sm:text-sm font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition shadow-2xs cursor-pointer"
                 >
                   <Square className="w-3.5 h-3.5 fill-current" />
                   <span>Stop</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowMicGuideModal(true)}
+                  className="flex items-center gap-1.5 px-3.5 py-3.5 rounded-xl text-xs font-semibold bg-white hover:bg-stone-50 text-stone-700 border border-stone-200/90 transition shadow-2xs cursor-pointer"
+                  title="Where to turn on microphone on Android and iPhone"
+                >
+                  <Smartphone className="w-3.5 h-3.5 text-amber-600" />
+                  <span className="hidden sm:inline">Phone Mic Permissions</span>
+                  <span className="sm:hidden">Mic Guide</span>
                 </button>
               </div>
 
               <button
                 type="button"
                 onClick={handleResetChat}
-                className="flex items-center gap-1 px-3.5 py-2.5 rounded-xl text-xs font-medium bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 cursor-pointer"
+                className="flex items-center gap-1 px-3.5 py-3 rounded-xl text-xs font-medium bg-stone-100/90 border border-stone-200/90 hover:bg-stone-200 text-stone-600 hover:text-stone-900 cursor-pointer transition shadow-2xs"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Reset</span>
@@ -2273,21 +2415,23 @@ export const VoiceCoach: React.FC<{
 
         {/* Right Column: Complete Persistent User Language Analytics & Critique Panel */}
         <div className="lg:col-span-5 space-y-4">
-          <div className="bg-[#FAFAFA] border border-gray-200 rounded-2xl p-4 sm:p-5 space-y-4 h-full">
-            <div className="flex items-center justify-between border-b border-gray-200 pb-3">
-              <div className="flex items-center gap-2">
-                <Award className="w-5 h-5 text-sky-500" />
+          <div className="bg-white border border-stone-200/90 rounded-2xl p-4 sm:p-5 space-y-4 h-full shadow-sm">
+            <div className="flex items-center justify-between border-b border-stone-200/80 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700">
+                  <Award className="w-4 h-4 text-amber-600" />
+                </div>
                 <div>
-                  <h3 className="text-sm font-bold text-gray-900">
-                    User Language Analytics &amp; Critique
+                  <h3 className="text-sm font-bold text-stone-900">
+                    Language Analytics &amp; Critique
                   </h3>
-                  <p className="text-[10px] text-gray-500">
+                  <p className="text-[10px] text-stone-500">
                     Saved across stops &amp; tabs until app refresh
                   </p>
                 </div>
               </div>
               {critique && (
-                <span className="font-mono text-xs font-bold px-2.5 py-1 rounded-lg bg-[#0B2545] text-sky-300">
+                <span className="font-mono text-xs font-bold px-3 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-300/80">
                   Score: {critique.rating}/10
                 </span>
               )}
@@ -2295,27 +2439,27 @@ export const VoiceCoach: React.FC<{
 
             {/* 6 Core Language Scorecards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
-                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+              <div className="bg-[#FDFCF9] border border-stone-200/80 rounded-xl p-2.5 shadow-2xs">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Spoken Fluency
                 </div>
-                <div className="text-base font-bold text-gray-900 font-mono mt-0.5">
+                <div className="text-base font-bold text-amber-700 font-mono mt-0.5">
                   {critique ? `${critique.fluencyScore}%` : '—'}
                 </div>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
-                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+              <div className="bg-[#FDFCF9] border border-stone-200/80 rounded-xl p-2.5 shadow-2xs">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Grammar &amp; Syntax
                 </div>
                 <div className="text-base font-bold text-emerald-700 font-mono mt-0.5">
                   {critique ? `${critique.grammarScore}%` : '—'}
                 </div>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
-                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+              <div className="bg-[#FDFCF9] border border-stone-200/80 rounded-xl p-2.5 shadow-2xs">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Vocabulary Richness
                 </div>
-                <div className="text-base font-bold text-[#0B2545] font-mono mt-0.5">
+                <div className="text-base font-bold text-sky-700 font-mono mt-0.5">
                   {languageAnalytics.totalWordsSpoken > 0
                     ? `${languageAnalytics.lexicalDiversityPct}%`
                     : critique
@@ -2323,11 +2467,11 @@ export const VoiceCoach: React.FC<{
                     : '—'}
                 </div>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
-                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+              <div className="bg-[#FDFCF9] border border-stone-200/80 rounded-xl p-2.5 shadow-2xs">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Clarity &amp; Diction
                 </div>
-                <div className="text-base font-bold text-sky-700 font-mono mt-0.5">
+                <div className="text-base font-bold text-cyan-700 font-mono mt-0.5">
                   {languageAnalytics.totalWordsSpoken > 0
                     ? `${languageAnalytics.pronunciationClarityPct}%`
                     : critique
@@ -2335,8 +2479,8 @@ export const VoiceCoach: React.FC<{
                     : '—'}
                 </div>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
-                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+              <div className="bg-[#FDFCF9] border border-stone-200/80 rounded-xl p-2.5 shadow-2xs">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Confidence &amp; Pace
                 </div>
                 <div className="text-base font-bold text-indigo-700 font-mono mt-0.5">
@@ -2347,44 +2491,44 @@ export const VoiceCoach: React.FC<{
                     : '—'}
                 </div>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-2.5">
-                <div className="text-[10px] text-gray-500 uppercase font-semibold">
+              <div className="bg-[#FDFCF9] border border-stone-200/80 rounded-xl p-2.5 shadow-2xs">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Speech Rate
                 </div>
-                <div className="text-base font-bold text-gray-900 font-mono mt-0.5">
+                <div className="text-base font-bold text-stone-900 font-mono mt-0.5">
                   {wpm > 0 ? `${wpm} WPM` : '—'}
                 </div>
               </div>
             </div>
 
             {/* Session Speech Telemetry Bar */}
-            <div className="bg-white border border-gray-200 rounded-xl p-3 grid grid-cols-4 gap-2 text-center">
+            <div className="bg-stone-50 border border-stone-200 rounded-xl p-3 grid grid-cols-4 gap-2 text-center shadow-2xs">
               <div>
-                <div className="text-[10px] text-gray-400 uppercase font-semibold">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Total Words
                 </div>
-                <div className="text-xs font-bold font-mono text-gray-900 mt-0.5">
+                <div className="text-xs font-bold font-mono text-stone-900 mt-0.5">
                   {languageAnalytics.totalWordsSpoken}
                 </div>
               </div>
-              <div className="border-l border-gray-100">
-                <div className="text-[10px] text-gray-400 uppercase font-semibold">
+              <div className="border-l border-stone-200">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Unique Words
                 </div>
-                <div className="text-xs font-bold font-mono text-[#0B2545] mt-0.5">
+                <div className="text-xs font-bold font-mono text-amber-800 mt-0.5">
                   {languageAnalytics.uniqueWordsCount}
                 </div>
               </div>
-              <div className="border-l border-gray-100">
-                <div className="text-[10px] text-gray-400 uppercase font-semibold">
+              <div className="border-l border-stone-200">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Speaking Time
                 </div>
-                <div className="text-xs font-bold font-mono text-gray-900 mt-0.5">
+                <div className="text-xs font-bold font-mono text-stone-900 mt-0.5">
                   {speakingTime}s
                 </div>
               </div>
-              <div className="border-l border-gray-100">
-                <div className="text-[10px] text-gray-400 uppercase font-semibold">
+              <div className="border-l border-stone-200">
+                <div className="text-[10px] text-stone-500 uppercase font-semibold">
                   Fillers Used
                 </div>
                 <div className="text-xs font-bold font-mono text-rose-600 mt-0.5">
@@ -2396,90 +2540,90 @@ export const VoiceCoach: React.FC<{
             {critique ? (
               <div className="space-y-3.5">
                 {/* Exact Section Where You Need to Improve */}
-                <div className="bg-sky-50/80 border border-sky-200/90 rounded-xl p-3.5 space-y-1.5">
-                  <div className="text-xs font-bold text-sky-950 flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 text-sky-600 shrink-0" />
+                <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3.5 space-y-1.5 shadow-2xs">
+                  <div className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
                     <span>Where to Improve (Specific Section Analysis)</span>
                   </div>
-                  <p className="text-xs text-gray-800 leading-relaxed">
+                  <p className="text-xs text-stone-800 leading-relaxed">
                     {critique.sectionToImprove}
                   </p>
                 </div>
 
                 {/* Detailed Breakdown: Fluency, Grammar, Vocabulary */}
-                <div className="bg-white border border-gray-200 rounded-xl p-3.5 space-y-3">
+                <div className="bg-stone-50/80 border border-stone-200 rounded-xl p-3.5 space-y-3 shadow-2xs">
                   <div>
-                    <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                    <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">
                       1. Fluency &amp; Pacing Critique ({languageAnalytics.paceLabel})
                     </div>
-                    <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">
+                    <p className="text-xs text-stone-700 mt-0.5 leading-relaxed">
                       {critique.fluencyCritique}
                     </p>
                   </div>
 
-                  <div className="border-t border-gray-100 pt-2.5">
-                    <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                  <div className="border-t border-stone-200 pt-2.5">
+                    <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">
                       2. Grammar &amp; Sentence Structure (Avg {languageAnalytics.avgWordsPerSentence || 0} words/sentence)
                     </div>
-                    <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">
+                    <p className="text-xs text-stone-700 mt-0.5 leading-relaxed">
                       {critique.grammarCritique}
                     </p>
                   </div>
 
-                  <div className="border-t border-gray-100 pt-2.5">
-                    <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                  <div className="border-t border-stone-200 pt-2.5">
+                    <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">
                       3. Vocabulary &amp; Word Choice ({languageAnalytics.uniqueWordsCount} unique words)
                     </div>
-                    <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">
+                    <p className="text-xs text-stone-700 mt-0.5 leading-relaxed">
                       {critique.vocabularyCritique}
                     </p>
                   </div>
                 </div>
 
                 {/* Better / Polished Way to Say It */}
-                <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-3.5 space-y-1.5">
+                <div className="bg-emerald-50/90 border border-emerald-200 rounded-xl p-3.5 space-y-1.5 shadow-2xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                       <span>Polished Way to Express It</span>
                     </span>
                     <button
                       type="button"
                       onClick={() => speakText(critique.refinedVersion, false)}
-                      className="text-[11px] text-emerald-900 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                      className="text-[11px] text-emerald-800 hover:text-emerald-950 font-semibold flex items-center gap-1 cursor-pointer"
                     >
                       <Volume2 className="w-3.5 h-3.5" />
                       <span>Listen</span>
                     </button>
                   </div>
-                  <p className="text-xs text-gray-800 leading-relaxed italic">
+                  <p className="text-xs text-stone-800 leading-relaxed italic">
                     &ldquo;{critique.refinedVersion}&rdquo;
                   </p>
                 </div>
               </div>
             ) : (
-              <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+              <div className="bg-stone-50/80 border border-stone-200 rounded-xl p-4 space-y-3 shadow-2xs">
                 <div>
-                  <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                  <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">
                     1. Fluency &amp; Pacing Critique
                   </div>
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-stone-500 mt-0.5">
                     Evaluates speaking speed, rhythm, and pause control after you speak.
                   </p>
                 </div>
-                <div className="border-t border-gray-100 pt-2.5">
-                  <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                <div className="border-t border-stone-200 pt-2.5">
+                  <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">
                     2. Grammar &amp; Sentence Structure
                   </div>
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-stone-500 mt-0.5">
                     Analyzes sentence clarity and transitions from your spoken turn.
                   </p>
                 </div>
-                <div className="border-t border-gray-100 pt-2.5">
-                  <div className="text-[11px] font-bold text-[#0F3057] uppercase tracking-wider">
+                <div className="border-t border-stone-200 pt-2.5">
+                  <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">
                     3. Vocabulary &amp; Word Choice
                   </div>
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-stone-500 mt-0.5">
                     Provides a polished version of your exact spoken statement.
                   </p>
                 </div>
@@ -2487,8 +2631,8 @@ export const VoiceCoach: React.FC<{
             )}
 
             {detectedFillers.length > 0 && (
-              <div className="bg-white border border-gray-200 rounded-xl p-3">
-                <div className="text-[11px] font-semibold text-gray-700 mb-1">
+              <div className="bg-rose-50/90 border border-rose-200 rounded-xl p-3 shadow-2xs">
+                <div className="text-[11px] font-semibold text-rose-950 mb-1">
                   Filler Words Detected in Session:
                 </div>
                 <div className="text-xs text-rose-700 font-medium">
@@ -2499,6 +2643,222 @@ export const VoiceCoach: React.FC<{
           </div>
         </div>
       </div>
+
+      {/* Where to Turn On Microphone on Phone Modal */}
+      {showMicGuideModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3.5 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-gray-200 space-y-4 my-auto animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-sky-50 text-sky-600">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold text-gray-900">
+                    Where to Turn On Microphone
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    Step-by-step phone browser permission guide
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowMicGuideModal(false)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Platform Selector Tabs */}
+            <div className="grid grid-cols-2 p-1 bg-gray-100 rounded-xl text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setMicGuideTab('android')}
+                className={`py-2 px-3 rounded-lg transition cursor-pointer ${
+                  micGuideTab === 'android'
+                    ? 'bg-white text-gray-900 shadow-xs'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                🤖 Android (Chrome / Brave)
+              </button>
+              <button
+                type="button"
+                onClick={() => setMicGuideTab('ios')}
+                className={`py-2 px-3 rounded-lg transition cursor-pointer ${
+                  micGuideTab === 'ios'
+                    ? 'bg-white text-gray-900 shadow-xs'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                🍏 iPhone / iPad (Safari)
+              </button>
+            </div>
+
+            {/* Tab 1: Android Instructions */}
+            {micGuideTab === 'android' && (
+              <div className="space-y-3 text-xs text-gray-700">
+                <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-sky-900 font-medium">
+                  Follow these 3 quick steps in your phone's browser bar:
+                </div>
+
+                <div className="space-y-2.5">
+                  <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                    <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">
+                      1
+                    </span>
+                    <div>
+                      <span className="font-bold text-gray-900 block">
+                        Tap the Tune / Lock icon in the address bar
+                      </span>
+                      <span className="text-gray-600">
+                        At the very top of your phone screen next to the web address, tap the <strong>Tune (sliders) icon 🎛️</strong> or <strong>Lock icon 🔒</strong>.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                    <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">
+                      2
+                    </span>
+                    <div>
+                      <span className="font-bold text-gray-900 block">
+                        Tap &ldquo;Permissions&rdquo;
+                      </span>
+                      <span className="text-gray-600">
+                        Select <strong>Permissions</strong> (or <em>Site settings</em>). You will see Microphone listed as <em>Blocked</em>.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                    <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">
+                      3
+                    </span>
+                    <div>
+                      <span className="font-bold text-gray-900 block">
+                        Switch Microphone to &ldquo;Allow&rdquo;
+                      </span>
+                      <span className="text-gray-600">
+                        Toggle the switch or tap <strong>Allow</strong>. Then return here and tap the button below.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-[11px] text-amber-900">
+                    <strong>If still blocked in Android Settings:</strong> Open phone <em>Settings ➔ Apps ➔ Chrome ➔ Permissions ➔ Microphone ➔ Allow</em>.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Tab 2: iPhone / Safari Instructions */}
+            {micGuideTab === 'ios' && (
+              <div className="space-y-3 text-xs text-gray-700">
+                <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-sky-900 font-medium">
+                  Follow these 3 quick steps in Safari:
+                </div>
+
+                <div className="space-y-2.5">
+                  <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                    <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">
+                      1
+                    </span>
+                    <div>
+                      <span className="font-bold text-gray-900 block">
+                        Tap the &lsquo;aA&rsquo; or Page Settings icon
+                      </span>
+                      <span className="text-gray-600">
+                        In Safari's bottom address bar, tap the <strong>aA</strong> button on the left of the URL.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                    <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">
+                      2
+                    </span>
+                    <div>
+                      <span className="font-bold text-gray-900 block">
+                        Tap &ldquo;Website Settings&rdquo;
+                      </span>
+                      <span className="text-gray-600">
+                        Select <strong>Website Settings</strong> from the popup menu.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                    <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">
+                      3
+                    </span>
+                    <div>
+                      <span className="font-bold text-gray-900 block">
+                        Change Microphone from &ldquo;Deny&rdquo; to &ldquo;Allow&rdquo;
+                      </span>
+                      <span className="text-gray-600">
+                        Set Microphone to <strong>Allow</strong> (or <em>Ask</em>).
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-[11px] text-amber-900">
+                    <strong>If blocked in iOS Settings:</strong> Open iPhone <em>Settings ➔ Safari ➔ Microphone ➔ Allow</em>, and ensure <em>Settings ➔ Privacy &amp; Security ➔ Microphone ➔ Safari is ON</em>.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Interactive Live Microphone Test Action */}
+            <div className="pt-2 border-t border-gray-100 flex flex-col gap-2.5">
+              <button
+                type="button"
+                onClick={testMicPermissions}
+                disabled={testingMicState === 'testing'}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-bold text-xs sm:text-sm shadow-md transition cursor-pointer disabled:opacity-60"
+              >
+                <Mic className="w-4 h-4" />
+                <span>
+                  {testingMicState === 'testing'
+                    ? 'Testing Microphone...'
+                    : testingMicState === 'granted'
+                    ? 'Microphone Granted! 🎉'
+                    : 'Test & Activate Microphone Now'}
+                </span>
+              </button>
+
+              {testingMicState === 'granted' && (
+                <div className="text-center text-xs text-emerald-700 font-semibold animate-in fade-in">
+                  ✅ Microphone permission is active and working! Closing guide...
+                </div>
+              )}
+
+              {testingMicState === 'denied' && (
+                <div className="text-center text-xs text-rose-700 font-semibold animate-in fade-in">
+                  ❌ Still blocked. Please follow the steps above in your browser bar, then try again.
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[11px] text-gray-500">
+                  Tip: Once allowed in your browser bar, tap &quot;Test &amp; Activate&quot; above.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowMicGuideModal(false)}
+                  className="px-3.5 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

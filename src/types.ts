@@ -121,6 +121,24 @@ export interface AccentConfig {
   rate: number;
 }
 
+export interface CurriculumTask {
+  id: string;
+  title: string;
+  category: 'DSA' | 'Aptitude' | 'Communication' | 'Core CS';
+  estimatedMinutes: number;
+  completed: boolean;
+}
+
+export interface CurriculumDailyQuestion {
+  id: string;
+  type: 'technical' | 'aptitude' | 'interview';
+  question: string;
+  options?: string[];
+  correctIndex?: number;
+  answerExplanation: string;
+  hint?: string;
+}
+
 export interface CurriculumDay {
   day: number;
   month: number;
@@ -130,4 +148,6 @@ export interface CurriculumDay {
   aptitudeTarget: string;
   communicationTarget: string;
   completed: boolean;
+  dailyTasks?: CurriculumTask[];
+  dailyQuestions?: CurriculumDailyQuestion[];
 }

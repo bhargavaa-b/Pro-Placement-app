@@ -16,6 +16,8 @@ import {
   Check,
   Trash2,
   ShieldCheck,
+  Bell,
+  Smartphone,
 } from 'lucide-react';
 import { UserProfile } from '../types';
 import {
@@ -28,6 +30,7 @@ import {
   fetchCohortLeaderboardFromSupabase,
 } from '../lib/supabase';
 import { ProPlacementAppLogo } from './ProPlacementAppLogo';
+import { streakNotificationService } from '../services/streakNotificationService';
 
 interface ProfileManagerProps {
   currentProfile: UserProfile;
@@ -376,6 +379,37 @@ export const ProfileManager: React.FC<ProfileManagerProps> = ({
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Phone Streak Protection Notifications Card */}
+          <div className="pt-3 border-t border-gray-200 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-pink-50/80 via-purple-50/60 to-pink-50/80 p-3.5 rounded-xl border border-pink-200">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-lg bg-pink-600 text-white shadow-2xs">
+                <Bell className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-gray-900 flex items-center gap-2">
+                  <span>Phone Streak Protection Notifications</span>
+                  <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-pink-200/80 text-pink-900">
+                    24h Rule
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-600 mt-0.5">
+                  Fires an urgent alert to your phone within 8 hours before the 24-hour streak expiration if inactive for 16 hours.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={async () => {
+                await streakNotificationService.sendTestNotification(currentProfile.streakDays || 1);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition cursor-pointer shadow-2xs whitespace-nowrap"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-pink-400" />
+              <span>Test Phone Alert</span>
+            </button>
           </div>
         </div>
       </div>

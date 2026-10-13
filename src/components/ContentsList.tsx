@@ -13,12 +13,14 @@ import {
   Trophy,
   CheckCircle2,
   Sparkles,
+  Bell,
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
 export interface ContentsListProps {
   currentProfile: UserProfile;
   onSelectTab: (tab: any) => void;
+  onOpenStreakModal?: () => void;
 }
 
 /**
@@ -66,6 +68,7 @@ interface ContentModule {
 export const ContentsList: React.FC<ContentsListProps> = ({
   currentProfile,
   onSelectTab,
+  onOpenStreakModal,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<
     'ALL' | 'CODING' | 'APTITUDE' | 'INTERVIEW' | 'CAREER'
@@ -231,16 +234,24 @@ export const ContentsList: React.FC<ContentsListProps> = ({
 
           {/* 4 Precise Metrics in Unified Glossy Blue Palette with Black Text */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {/* Streak */}
-            <div className="relative overflow-hidden bg-gradient-to-b from-[#F0F7FF] via-[#DBEAFE] to-[#BFDBFE] border border-[#93C5FD] px-3 py-2 rounded-xl text-left select-none shadow-[0_2px_8px_rgba(37,99,235,0.1),inset_0_1px_1px_rgba(255,255,255,0.9)] before:absolute before:inset-x-0 before:top-0 before:h-[45%] before:bg-gradient-to-b before:from-white/70 before:to-transparent before:pointer-events-none">
-              <div className="flex items-center gap-1 text-[10px] text-black uppercase font-bold tracking-wider relative z-10">
-                <Flame className="w-3 h-3 text-blue-600 fill-sky-400 shrink-0" />
-                <span>Streak</span>
+            {/* Streak with Phone Alert trigger */}
+            <button
+              type="button"
+              onClick={onOpenStreakModal || (() => onSelectTab('profile'))}
+              title="Click to view 24h Streak & configure Phone Retention Notifications"
+              className="relative overflow-hidden bg-gradient-to-b from-[#F0F7FF] via-[#DBEAFE] to-[#BFDBFE] border border-[#93C5FD] hover:border-[#60A5FA] px-3 py-2 rounded-xl text-left transition cursor-pointer shadow-[0_2px_8px_rgba(37,99,235,0.1),inset_0_1px_1px_rgba(255,255,255,0.9)] hover:shadow-[0_4px_14px_rgba(37,99,235,0.18),inset_0_1px_2px_rgba(255,255,255,0.95)] before:absolute before:inset-x-0 before:top-0 before:h-[45%] before:bg-gradient-to-b before:from-white/70 before:to-transparent before:pointer-events-none group"
+            >
+              <div className="flex items-center justify-between text-[10px] text-black uppercase font-bold tracking-wider relative z-10">
+                <div className="flex items-center gap-1">
+                  <Flame className="w-3 h-3 text-pink-600 fill-pink-400 shrink-0" />
+                  <span>Streak</span>
+                </div>
+                <Bell className="w-2.5 h-2.5 text-blue-700 opacity-70 group-hover:opacity-100" />
               </div>
               <span className="text-sm sm:text-base font-extrabold text-black font-mono tabular-nums block mt-0.5 relative z-10">
                 {currentProfile.streakDays}d
               </span>
-            </div>
+            </button>
 
             {/* DSA Solved */}
             <button

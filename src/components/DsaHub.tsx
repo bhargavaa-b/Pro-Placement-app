@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   Bookmark,
   Code2,
-  Play,
   RotateCcw,
   Copy,
   Check,
@@ -46,24 +45,6 @@ export const DsaHub: React.FC<DsaHubProps> = ({
   const [userCode, setUserCode] = useState('');
   const [copiedCode, setCopiedCode] = useState(false);
 
-  // Test Runner State
-  const [isRunningTests, setIsRunningTests] = useState(false);
-  const [testResults, setTestResults] = useState<{
-    status: 'IDLE' | 'PASSED' | 'FAILED';
-    runtimeMs: number;
-    memoryMb: number;
-    testCasesPassed: number;
-    totalTestCases: number;
-    stdout: string;
-  }>({
-    status: 'IDLE',
-    runtimeMs: 0,
-    memoryMb: 0,
-    testCasesPassed: 0,
-    totalTestCases: 0,
-    stdout: '',
-  });
-
   // Filter Logic
   const filteredQuestions = useMemo(() => {
     return fullRepository.filter((q) => {
@@ -91,14 +72,6 @@ export const DsaHub: React.FC<DsaHubProps> = ({
   const handleOpenModal = (q: DSAQuestion) => {
     setActiveQuestion(q);
     setUserCode(q.solutions[activeLanguage]);
-    setTestResults({
-      status: 'IDLE',
-      runtimeMs: 0,
-      memoryMb: 0,
-      testCasesPassed: 0,
-      totalTestCases: 0,
-      stdout: '',
-    });
     try {
       window.history.pushState({ ppSubView: 'dsa-question', qId: q.id }, '');
     } catch {
@@ -137,29 +110,6 @@ export const DsaHub: React.FC<DsaHubProps> = ({
     navigator.clipboard.writeText(activeQuestion.solutions[activeLanguage]);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
-  };
-
-  const handleRunTests = () => {
-    if (!activeQuestion) return;
-    setIsRunningTests(true);
-    setTestResults((prev) => ({ ...prev, status: 'IDLE' }));
-
-    setTimeout(() => {
-      setIsRunningTests(false);
-      const runtime = Math.floor(Math.random() * 30) + 20;
-      const memory = (Math.random() * 3 + 12).toFixed(1);
-      setTestResults({
-        status: 'PASSED',
-        runtimeMs: runtime,
-        memoryMb: parseFloat(memory),
-        testCasesPassed: activeQuestion.testCases.length,
-        totalTestCases: activeQuestion.testCases.length,
-        stdout: `Solution verified against ${activeQuestion.testCases.length} sample test cases.\nExecution Time: ${runtime} ms · Memory: ${memory} MB.`,
-      });
-      if (!solvedIds.includes(activeQuestion.id)) {
-        onToggleSolved(activeQuestion.id);
-      }
-    }, 600);
   };
 
   return (
@@ -699,39 +649,28 @@ export const DsaHub: React.FC<DsaHubProps> = ({
                   </div>
                 </div>
 
-                {/* Test Runner */}
-                <div className="mt-4 pt-3 border-t border-gray-200">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-xs text-gray-600 font-medium">
-                      Simulated Test Runner
-                    </div>
-
-                    <button
-                      onClick={handleRunTests}
-                      disabled={isRunningTests}
-                      className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl text-xs transition shadow-xs active:scale-95 disabled:opacity-50"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>{isRunningTests ? 'Running...' : 'Run Test Cases'}</span>
-                    </button>
+                {/* Solution Action Bar */}
+                <div className="mt-4 pt-3 border-t border-gray-200 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-xs text-gray-500 font-mono">
+                    <span className="font-semibold text-gray-700">Language:</span>
+                    <span className="uppercase text-[#0B2545] font-bold">{activeLanguage}</span>
+                    <span>·</span>
+                    <span>{activeQuestion.solutions[activeLanguage].split('\n').length} lines</span>
                   </div>
 
-                  <div className="bg-white rounded-xl p-3 border border-gray-200 font-mono text-xs text-gray-800">
-                    {testResults.status === 'PASSED' ? (
-                      <div>
-                        <div className="flex items-center gap-2 text-emerald-600 font-bold mb-1">
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>All {testResults.totalTestCases} Test Cases Passed</span>
-                        </div>
-                        <div className="text-[11px] text-gray-500 mt-1">
-                          {testResults.stdout}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-gray-400 italic">
-                        Click "Run Test Cases" to run and verify your solution against sample assertions.
-                      </div>
-                    )}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onToggleSolved(activeQuestion.id)}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 ${
+                        solvedIds.includes(activeQuestion.id)
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{solvedIds.includes(activeQuestion.id) ? 'Solved' : 'Mark as Solved'}</span>
+                    </button>
                   </div>
                 </div>
               </div>

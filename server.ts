@@ -911,7 +911,19 @@ function generateAccurateVoiceReply(
 
   // 3. Computer Science & Technology Concepts
   } else if (/\b(what is (an? )?api|rest apis?|application programming interface)\b/i.test(lower)) {
-    spokenReply = `An API, or Application Programming Interface, is a set of defined rules and protocols that lets different software applications communicate and exchange data with each other seamlessly.`;
+    spokenReply = `An API, or Application Programming Interface, is a formal contract of endpoints, protocols, and data formats that enables disparate software systems to interact and exchange data securely over networks.`;
+  } else if (/\b(cap theorem)\b/i.test(lower)) {
+    spokenReply = `The CAP theorem states that any distributed data store can guarantee at most two out of three core properties: Consistency, Availability, and Partition Tolerance. In the real world, network partitions are inevitable, meaning distributed architectures must intentionally choose between Consistency like CP systems or Availability like AP systems during network partitions.`;
+  } else if (/\b(paxos|raft)\b/i.test(lower)) {
+    spokenReply = `Paxos and Raft are distributed consensus algorithms ensuring that a cluster of nodes agree on state machine transitions even amid network partitions or node failures. Raft decomposes consensus into leader election, log replication, and safety, making it mathematically equivalent to Multi-Paxos while significantly easier to understand and operate in production.`;
+  } else if (/\b(consistent hashing)\b/i.test(lower)) {
+    spokenReply = `Consistent hashing maps both servers and data keys onto a circular hash ring modulo 2 to the power of 32. When a node is added or removed, only k over n keys need to be remapped rather than reshuffling all data, and virtual nodes prevent hotspot skew across distributed caches and database partitions.`;
+  } else if (/\b(lru cache|least recently used)\b/i.test(lower)) {
+    spokenReply = `An LRU Cache operates in O(1) time complexity for both get and put operations by combining a Hash Map with a Doubly Linked List. The hash map provides constant time lookup to list nodes, while the doubly linked list maintains eviction ordering by moving accessed items to the head and evicting from the tail when capacity is exceeded.`;
+  } else if (/\b(virtual memory|page faults?|paging)\b/i.test(lower)) {
+    spokenReply = `Virtual memory provides processes with isolated, contiguous address spaces while mapping virtual pages to physical memory frames via page tables. When a requested page is not resident in physical RAM, the Memory Management Unit triggers a page fault interrupt, prompting the operating system kernel to swap the missing page from disk into memory.`;
+  } else if (/\b(kafka|message queue(s)?|event-driven)\b/i.test(lower)) {
+    spokenReply = `Apache Kafka is a distributed event streaming platform built on append-only partitioned commit logs. It achieves millions of messages per second throughput by leveraging sequential disk input-output, page cache utilization, zero-copy kernel transfers via sendfile, and consumer group offset management.`;
   } else if (/\b(polymorphism|polymorphic)\b/i.test(lower)) {
     spokenReply = `Polymorphism in object-oriented programming allows objects of different classes to be treated through a unified interface, through method overriding at runtime or method overloading at compile time.`;
   } else if (/\b(encapsulation)\b/i.test(lower)) {
@@ -921,15 +933,21 @@ function generateAccurateVoiceReply(
   } else if (/\b(inheritance)\b/i.test(lower)) {
     spokenReply = `Inheritance allows a new class to inherit attributes and behaviors from an existing parent class, maximizing code reusability and establishing hierarchical relationships.`;
   } else if (/\b(deadlocks?)\b/i.test(lower)) {
-    spokenReply = `A deadlock is a concurrency condition where two or more processes are blocked indefinitely because each is waiting for a resource held by another.`;
+    spokenReply = `A deadlock is a concurrency condition where two or more processes are blocked indefinitely waiting on resources held by each other. It requires four simultaneous Coffman conditions: Mutual Exclusion, Hold and Wait, No Preemption, and Circular Wait, and can be resolved via strict lock acquisition ordering or deadlock detection algorithms.`;
+  } else if (/\b(mutex vs semaphore|semaphore vs mutex)\b/i.test(lower)) {
+    spokenReply = `A mutex is a mutual exclusion lock with strict ownership, where only the thread that acquired the lock can unlock it. A counting semaphore is a signaling primitive that maintains an integer counter allowing up to N concurrent threads to access a shared resource pool, and any thread can signal it.`;
   } else if (/\b(process(es)? vs thread(s)?|difference between process(es)? and thread(s)?)\b/i.test(lower)) {
-    spokenReply = `A process is an isolated executing program with its own dedicated memory space, whereas a thread is a lightweight execution unit running within a process and sharing its memory.`;
+    spokenReply = `A process is an isolated executing program with its own dedicated memory space and file descriptors, whereas a thread is a lightweight execution unit running within a process that shares the same virtual address space, heap, and open handles.`;
   } else if (/\b(acid)\b/i.test(lower)) {
-    spokenReply = `ACID stands for Atomicity, Consistency, Isolation, and Durability—the four foundational properties guaranteeing reliable transactions in relational database systems.`;
+    spokenReply = `ACID guarantees reliable relational database transactions: Atomicity ensures all operations succeed or all rollback; Consistency maintains schema invariants; Isolation prevents concurrent transactions from interfering; and Durability guarantees committed writes survive system crashes through write-ahead logging.`;
   } else if (/\b(sql vs nosql)\b/i.test(lower)) {
-    spokenReply = `SQL databases are relational and structured with rigid schemas and ACID transactions, while NoSQL databases scale horizontally and handle document, key-value, or graph data flexibly.`;
+    spokenReply = `SQL databases are relational and structured with rigid schemas and ACID transactions, while NoSQL databases scale horizontally and handle document, key-value, column-family, or graph data with flexible schemas and eventual consistency.`;
+  } else if (/\b(tcp vs udp|udp vs tcp)\b/i.test(lower)) {
+    spokenReply = `TCP is a connection-oriented protocol that guarantees ordered, reliable, error-checked packet delivery through sequence numbers and flow control. UDP is connectionless and lightweight, transmitting datagrams with minimal overhead and lower latency, making it ideal for video streaming and real-time gaming.`;
+  } else if (/\b(tcp (three-way )?handshake|3-way handshake)\b/i.test(lower)) {
+    spokenReply = `The TCP three-way handshake establishes a reliable full-duplex connection between client and server: first the client sends a SYN packet with an initial sequence number; the server replies with SYN-ACK; and finally the client returns an ACK packet, confirming both sides are synchronized.`;
   } else if (/\b(binary search)\b/i.test(lower)) {
-    spokenReply = `Binary search is an efficient algorithm that finds a target in a sorted list in O(log n) time by repeatedly dividing the search interval in half.`;
+    spokenReply = `Binary search is an efficient divide-and-conquer algorithm that locates a target key in a sorted sequence in logarithmic O(log n) time by continually comparing the middle element and halving the remaining search interval.`;
   } else if (/\b(recursion)\b/i.test(lower)) {
     spokenReply = `Recursion is a programming technique where a function calls itself to solve smaller sub-problems until it hits a defined base condition.`;
   } else if (/\b(dynamic programming|\bdp\b)\b/i.test(lower)) {
@@ -1044,82 +1062,106 @@ app.post('/api/interview/feedback', async (req, res) => {
             .join('\n')
         : '';
 
-      const prompt = `You are an intelligent, articulate real-time voice coach and conversational AI.
-The user is speaking to you via microphone.
-Users can ask ANY question: real-world questions (science, nature, geography, world facts, history, everyday how-it-works, general knowledge), personal advice, technical concepts, or mock interview questions.
-Give a direct, factually accurate, natural spoken response directly answering what the user asked.
-Do NOT assume the user is only preparing for a software engineering interview unless they explicitly asked for that.
-Do NOT give canned or repetitive interview answers.
-Keep spoken answers direct, engaging, and spoken in 1-3 natural sentences (20-45 words). Plain spoken words only, no markdown or asterisks.
+      const systemInstruction = `You are an elite, highly knowledgeable voice coach and technical mentor from 3LLION Ventures.
+Your mission is to provide deep, factually exact, and authoritative answers to user queries, especially COMPLEX and technical questions:
+1. Complex Technical & Conceptual Questions (e.g., System Design, Distributed Systems, Operating Systems, Concurrency, Algorithms, Networking, Database internals, Cloud, AI, Math, Science):
+   - Provide a deeply accurate, intellectually rigorous explanation detailing the core mechanisms, exact terminology, architectural trade-offs, and implementation nuances.
+   - Never give vague, generic, or evasive summaries.
+   - For technical questions, deliver a clear, well-structured explanation of 3 to 5 spoken sentences (approx. 50 to 90 words).
+2. General, Everyday, or Behavioral Questions:
+   - Provide a direct, natural, and helpful spoken response of 1 to 3 sentences (approx. 25 to 50 words).
+3. Spoken Voice Constraint:
+   - "spokenReply" will be spoken out loud by text-to-speech. Use smooth, natural spoken conversational language only. Absolutely NO markdown, NO asterisks, NO bullet points, and NO hashtags in "spokenReply".
+4. Coaching Feedback:
+   - Provide genuine vocal delivery, phrasing, fluency, and grammatical critique.`;
 
-Current Date: ${nowIso}
-${historyContext ? `Conversation so far:\n${historyContext}\n` : ''}
+      const userPrompt = `Current Date: ${nowIso}
+${historyContext ? `Conversation history:\n${historyContext}\n` : ''}
 User said: "${trimmedInput}"
 
-Respond ONLY with a valid JSON object with the following keys:
-"spokenReply": (string) Direct, accurate spoken answer to the user (1-2 sentences). Plain conversational speech only, no markdown, no asterisks.
-"refinedVersion": (string) Polished phrasing of what the user asked or said.
-"sectionToImprove": (string) A specific, non-repetitive coaching tip for their vocal delivery or phrasing.
-"fluencyCritique": (string) Concise observation on their spoken cadence and pacing.
-"grammarCritique": (string) Concise note on sentence structure or grammar.
-"vocabularyCritique": (string) Note on word choice or expression.
-"rating": (number, 1 to 10)
-"fluencyScore": (number, 70 to 98)
-"grammarScore": (number, 75 to 98)`;
+Respond ONLY with a valid JSON object matching this schema:
+{
+  "spokenReply": "Direct, factually deep, spoken answer explaining the question accurately without markdown or asterisks",
+  "refinedVersion": "Polished phrasing of what the user asked or said",
+  "sectionToImprove": "Specific, practical tip for their technical delivery, vocabulary, or speaking pacing",
+  "fluencyCritique": "Concise note on spoken rhythm and delivery speed",
+  "grammarCritique": "Concise note on grammar and sentence structure",
+  "vocabularyCritique": "Note on precision of technical or English vocabulary used",
+  "rating": 9,
+  "fluencyScore": 92,
+  "grammarScore": 95
+}`;
 
       const callGeminiModel = async () => {
-        const aiResponse = await client.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
-          contents: prompt,
-          config: {
-            temperature: 0.3,
-            maxOutputTokens: 300,
-          },
-        });
-        const rawText = (aiResponse.text || '').trim();
-        if (!rawText) throw new Error('Empty model reply');
+        // Ultra-low latency voice models: gemini-2.5-flash with zero thinking budget for instant turnaround
+        const modelsToTry = ['gemini-2.5-flash', 'gemini-3.1-flash-lite'];
+        let lastError: any = null;
 
-        let parsed: any = null;
-        try {
-          // Clean json codeblocks if returned
-          const cleanedJson = rawText
-            .replace(/^```json\s*/i, '')
-            .replace(/^```\s*/, '')
-            .replace(/\s*```$/, '')
-            .trim();
-          parsed = JSON.parse(cleanedJson);
-        } catch {
-          // If JSON parse failed, extract plain spoken text
-          const plainSpoken = rawText.replace(/[*#_`~>]/g, '').trim();
-          if (plainSpoken) {
-            parsed = {
-              ...baseCritique,
-              spokenReply: plainSpoken,
-            };
+        for (const modelName of modelsToTry) {
+          try {
+            const callPromise = client.models.generateContent({
+              model: modelName,
+              contents: userPrompt,
+              config: {
+                systemInstruction,
+                temperature: 0.15,
+                maxOutputTokens: 240,
+                responseMimeType: 'application/json',
+                thinkingConfig: { thinkingBudget: 0 },
+              },
+            });
+            const timeoutPromise = new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Model timeout')), 650)
+            );
+            const aiResponse = await Promise.race([callPromise, timeoutPromise]);
+
+            const rawText = (aiResponse.text || '').trim();
+            if (!rawText) continue;
+
+            let parsed: any = null;
+            try {
+              const cleanedJson = rawText
+                .replace(/^```json\s*/i, '')
+                .replace(/^```\s*/, '')
+                .replace(/\s*```$/, '')
+                .trim();
+              parsed = JSON.parse(cleanedJson);
+            } catch {
+              const plainSpoken = rawText.replace(/[*#_`~>]/g, '').trim();
+              if (plainSpoken) {
+                parsed = {
+                  ...baseCritique,
+                  spokenReply: plainSpoken,
+                };
+              }
+            }
+
+            if (parsed && typeof parsed.spokenReply === 'string' && parsed.spokenReply.length > 5) {
+              return {
+                rating: typeof parsed.rating === 'number' ? parsed.rating : baseCritique.rating,
+                fluencyScore: typeof parsed.fluencyScore === 'number' ? parsed.fluencyScore : baseCritique.fluencyScore,
+                grammarScore: typeof parsed.grammarScore === 'number' ? parsed.grammarScore : baseCritique.grammarScore,
+                spokenReply: parsed.spokenReply.replace(/[*#_`~>]/g, '').trim(),
+                sectionToImprove: parsed.sectionToImprove || baseCritique.sectionToImprove,
+                fluencyCritique: parsed.fluencyCritique || baseCritique.fluencyCritique,
+                grammarCritique: parsed.grammarCritique || baseCritique.grammarCritique,
+                vocabularyCritique: parsed.vocabularyCritique || baseCritique.vocabularyCritique,
+                refinedVersion: parsed.refinedVersion || baseCritique.refinedVersion,
+              };
+            }
+          } catch (modelErr: any) {
+            lastError = modelErr;
+            continue;
           }
         }
 
-        if (parsed && typeof parsed.spokenReply === 'string' && parsed.spokenReply.length > 5) {
-          const finalResult = {
-            rating: typeof parsed.rating === 'number' ? parsed.rating : baseCritique.rating,
-            fluencyScore: typeof parsed.fluencyScore === 'number' ? parsed.fluencyScore : baseCritique.fluencyScore,
-            grammarScore: typeof parsed.grammarScore === 'number' ? parsed.grammarScore : baseCritique.grammarScore,
-            spokenReply: parsed.spokenReply.replace(/[*#_`~>]/g, '').trim(),
-            sectionToImprove: parsed.sectionToImprove || baseCritique.sectionToImprove,
-            fluencyCritique: parsed.fluencyCritique || baseCritique.fluencyCritique,
-            grammarCritique: parsed.grammarCritique || baseCritique.grammarCritique,
-            vocabularyCritique: parsed.vocabularyCritique || baseCritique.vocabularyCritique,
-            refinedVersion: parsed.refinedVersion || baseCritique.refinedVersion,
-          };
-          return finalResult;
-        }
-        throw new Error('Invalid JSON structure');
+        throw lastError || new Error('All model attempts failed');
       };
 
       try {
-        // Generous 12-second timeout guard so model has ample time while protecting server
+        // Ultra-brisk 2.2-second timeout guard for instant user response
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Voice latency timeout')), 12000)
+          setTimeout(() => reject(new Error('Voice latency timeout')), 2200)
         );
 
         const result: any = await Promise.race([
@@ -1251,19 +1293,21 @@ app.post('/api/interview/transcribe', async (req, res) => {
         : 'audio/webm';
 
     const runTranscribe = async (modelName: string) => {
+      const audioPart = {
+        inlineData: {
+          mimeType: safeMime,
+          data: audioBase64,
+        },
+      };
       const aiResponse = await client.models.generateContent({
         model: modelName,
-        contents: [
-          {
-            inlineData: {
-              mimeType: safeMime,
-              data: audioBase64,
+        contents: {
+          parts: [
+            audioPart,
+            {
+              text: 'Transcribe this audio accurately into English words. Output only the exact words spoken by the speaker. If the audio is completely silent, background noise, or unintelligible clicks, output: SILENCE',
             },
-          },
-          'Listen carefully to this audio. Transcribe the exact spoken English words said by the speaker. CRITICAL: Do NOT guess, invent, or hallucinate words. If the audio only contains silence, background noise, clicks, or unintelligible sounds, output the single word: SILENCE',
-        ],
-        config: {
-          temperature: 0.0,
+          ],
         },
       });
       const text = (aiResponse.text || '').trim();
@@ -1274,14 +1318,21 @@ app.post('/api/interview/transcribe', async (req, res) => {
     };
 
     try {
-      const transcript = await Promise.any([
-        runTranscribe('gemini-flash-latest'),
-        runTranscribe('gemini-3.5-transcribe'),
-        runTranscribe('gemini-3.8-flash'),
-        runTranscribe('gemini-3.1-flash-lite'),
-      ]);
+      let transcript = '';
+      try {
+        transcript = await runTranscribe('gemini-3.5-transcribe');
+      } catch (err1: any) {
+        console.warn('gemini-3.5-transcribe attempt note:', err1?.message || err1);
+        try {
+          transcript = await runTranscribe('gemini-3.8-flash');
+        } catch (err2: any) {
+          console.warn('gemini-3.8-flash attempt note:', err2?.message || err2);
+          transcript = '';
+        }
+      }
       return res.json({ transcript });
-    } catch {
+    } catch (tErr: any) {
+      console.warn('Transcribe attempt note:', tErr?.message || tErr);
       return res.json({ transcript: '' });
     }
   } catch {
