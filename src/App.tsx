@@ -1040,7 +1040,7 @@ export default function App() {
       label: 'Byte Runner',
       shortLabel: 'Byte Runner',
       icon: Gamepad2,
-      colorClass: 'text-pink-500',
+      colorClass: 'text-blue-600',
     },
     {
       id: 'curriculum',
