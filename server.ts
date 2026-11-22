@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 
@@ -16,8 +17,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const SERVER_SESSION_SECRET =
-  process.env.SESSION_SECRET ||
-  '3LLION_PRO_PLACEMENT_DETERMINISTIC_SESSION_SECRET_2026';
+  process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 
 function createSessionToken(email: string): string {
   return crypto
@@ -33,6 +33,392 @@ function sanitizeServerString(val: unknown, maxLen = 160): string {
     .replace(/javascript:/gi, '')
     .trim()
     .slice(0, maxLen);
+}
+
+interface WelcomeEmailPayload {
+  name: string;
+  email: string;
+  university?: string;
+  graduationYear?: string;
+}
+
+interface WelcomeEmailResult {
+  sent: boolean;
+  configured: boolean;
+  provider: 'resend' | 'smtp' | 'none';
+  recipient: string;
+  message: string;
+}
+
+const EMAIL_REGEX = /^[^\s@<>()[\]\\,;:\s"]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/;
+const RECENT_WELCOME_SEND_MS = new Map<string, number>();
+const DEDUPE_WINDOW_MS = 15_000;
+
+function stripHeaderControls(value: unknown, maxLen = 200): string {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/[\r\n\0\t]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+}
+
+function escapeEmailHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function isPlaceholderSecret(val: string | undefined): boolean {
+  if (!val) return true;
+  const trimmed = val.trim();
+  if (!trimmed) return true;
+  return /^(MY_|your-|placeholder|changeme|example)/i.test(trimmed);
+}
+
+function sanitizePublicAppUrl(rawUrl: string | undefined): string {
+  if (!rawUrl || isPlaceholderSecret(rawUrl)) return '';
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return parsed.toString().replace(/\/$/, '');
+    }
+  } catch {
+    // Ignore invalid URL
+  }
+  return '';
+}
+
+function isValidCandidateEmail(rawEmail: string): boolean {
+  const cleaned = stripHeaderControls(rawEmail, 254).toLowerCase();
+  return Boolean(cleaned && cleaned.length <= 254 && EMAIL_REGEX.test(cleaned));
+}
+
+function buildWelcomeEmailContent(payload: WelcomeEmailPayload) {
+  const safeName = stripHeaderControls(payload.name, 100) || 'Candidate';
+  const safeEmail = stripHeaderControls(payload.email, 254).toLowerCase();
+  const safeUni = stripHeaderControls(payload.university, 140) || 'Engineering Institution';
+  const safeGrad = stripHeaderControls(payload.graduationYear, 20) || 'Upcoming Batch';
+  const appUrl = sanitizePublicAppUrl(process.env.APP_URL);
+
+  const htmlName = escapeEmailHtml(safeName);
+  const htmlEmail = escapeEmailHtml(safeEmail);
+  const htmlUni = escapeEmailHtml(safeUni);
+  const htmlGrad = escapeEmailHtml(safeGrad);
+  const htmlAppUrl = appUrl ? escapeEmailHtml(appUrl) : '';
+
+  const subject = `Welcome to Pro Placement, ${safeName} — Engineering the Future | 3LLION`;
+
+  const text = [
+    `Welcome to Pro Placement, ${safeName}!`,
+    ``,
+    `Greetings from Pro Placement — a software technology initiative by 3LLION, founded by Bhargava B.`,
+    ``,
+    `We are thrilled to welcome you aboard. Your candidate workspace is now active and tailored for placement excellence:`,
+    `- Email: ${safeEmail}`,
+    `- Institution: ${safeUni}`,
+    `- Graduation Batch: ${safeGrad}`,
+    ``,
+    `What awaits inside your workspace:`,
+    `1. 270-Day Placement Master Syllabus with daily guided goals`,
+    `2. 3,000+ DSA Coding Hub organized by tier & company patterns`,
+    `3. 10,000+ Aptitude Arena with timed placement mocks`,
+    `4. Executive Voice Coach for interview fluency and technical articulation`,
+    `5. Byte Runner daily logic puzzle & ATS Resume Builder`,
+    ...(appUrl ? [``, `Continue your preparation: ${appUrl}`] : []),
+    ``,
+    `Stay consistent, protect your daily streak, and engineer your future.`,
+    ``,
+    `Warm regards,`,
+    `Pro Placement Team`,
+    `3LLION · Founded by Bhargava B`,
+  ].join('\n');
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeEmailHtml(subject)}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F4F6F9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#18181B;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F4F6F9;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E2E8F0;box-shadow:0 8px 24px rgba(11,37,69,0.06);">
+          <tr>
+            <td style="background-color:#0B2545;padding:28px 32px;border-bottom:4px solid #D4AF37;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;color:#D4AF37;margin-bottom:6px;">
+                3LLION · FOUNDED BY BHARGAVA B
+              </div>
+              <h1 style="margin:0;font-size:24px;line-height:1.25;font-weight:800;color:#FFFFFF;">
+                Welcome to Pro Placement
+              </h1>
+              <p style="margin:6px 0 0;font-size:13px;color:#CBD5E1;">
+                Engineering the Future · Complete Placement Operating System
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:30px 32px;">
+              <p style="margin:0 0 14px;font-size:16px;line-height:1.6;color:#0F172A;">
+                Dear <strong>${htmlName}</strong>,
+              </p>
+              <p style="margin:0 0 18px;font-size:15px;line-height:1.65;color:#334155;">
+                Warm greetings from <strong>Pro Placement</strong> (a software tech platform by <strong>3LLION</strong>)! We are delighted to welcome you to your structured placement readiness journey.
+              </p>
+
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;margin-bottom:22px;">
+                <tr>
+                  <td style="padding:16px 20px;">
+                    <div style="font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#64748B;margin-bottom:10px;">
+                      Registered Candidate Profile
+                    </div>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="4" style="font-size:13.5px;color:#1E293B;">
+                      <tr>
+                        <td style="color:#64748B;width:130px;">Email ID</td>
+                        <td style="font-weight:600;">${htmlEmail}</td>
+                      </tr>
+                      <tr>
+                        <td style="color:#64748B;">Institution</td>
+                        <td style="font-weight:600;">${htmlUni}</td>
+                      </tr>
+                      <tr>
+                        <td style="color:#64748B;">Graduation Batch</td>
+                        <td style="font-weight:600;">${htmlGrad}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="font-size:12px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:#0B2545;margin-bottom:10px;">
+                Your Preparation Modules Are Ready
+              </div>
+              <ul style="margin:0 0 22px;padding-left:20px;font-size:14px;line-height:1.75;color:#334155;">
+                <li><strong>270-Day Master Syllabus:</strong> Day-by-day guided placement roadmap</li>
+                <li><strong>3,000+ DSA Coding Hub:</strong> Structured algorithmic tracks &amp; company sets</li>
+                <li><strong>10,000+ Aptitude Arena:</strong> Quantitative, logical &amp; timed mock assessments</li>
+                <li><strong>Executive Voice Coach:</strong> Real-time spoken interview clarity &amp; delivery</li>
+                <li><strong>Byte Runner &amp; ATS Resume Builder:</strong> Daily logic challenge &amp; resume scorer</li>
+              </ul>
+
+              ${
+                htmlAppUrl
+                  ? `<div style="margin:24px 0 8px;">
+                      <a href="${htmlAppUrl}" style="display:inline-block;background-color:#0B2545;color:#FFFFFF;text-decoration:none;font-size:14px;font-weight:700;padding:12px 24px;border-radius:10px;border-bottom:2px solid #D4AF37;">
+                        Open Pro Placement Workspace
+                      </a>
+                    </div>`
+                  : ''
+              }
+
+              <p style="margin:20px 0 0;font-size:14px;line-height:1.6;color:#475569;">
+                Stay consistent every day to keep your 24-hour preparation streak alive. Wishing you extraordinary success in your upcoming placements!
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#F8FAFC;padding:18px 32px;border-top:1px solid #E2E8F0;">
+              <p style="margin:0;font-size:13px;font-weight:700;color:#0B2545;">
+                Pro Placement · By 3LLION
+              </p>
+              <p style="margin:3px 0 0;font-size:12px;color:#64748B;">
+                Software Technology Initiative founded by Bhargava B · Automated Welcome Notification
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  return { subject, text, html, safeEmail };
+}
+
+async function sendWelcomeGreetingEmail(
+  payload: WelcomeEmailPayload
+): Promise<WelcomeEmailResult> {
+  const recipient = stripHeaderControls(payload.email, 254).toLowerCase();
+
+  if (!isValidCandidateEmail(recipient)) {
+    return {
+      sent: false,
+      configured: false,
+      provider: 'none',
+      recipient,
+      message: 'Invalid recipient email address.',
+    };
+  }
+
+  const now = Date.now();
+  const lastSentAt = RECENT_WELCOME_SEND_MS.get(recipient) || 0;
+  if (now - lastSentAt < DEDUPE_WINDOW_MS) {
+    return {
+      sent: true,
+      configured: true,
+      provider: 'none',
+      recipient,
+      message: 'Welcome email already queued for this sign-in.',
+    };
+  }
+
+  const { subject, text, html } = buildWelcomeEmailContent(payload);
+
+  const resendKey = !isPlaceholderSecret(process.env.RESEND_API_KEY)
+    ? process.env.RESEND_API_KEY!.trim()
+    : '';
+  const smtpHostRaw = !isPlaceholderSecret(process.env.SMTP_HOST)
+    ? stripHeaderControls(process.env.SMTP_HOST, 200)
+    : '';
+  const smtpUser = !isPlaceholderSecret(process.env.SMTP_USER)
+    ? stripHeaderControls(process.env.SMTP_USER, 254)
+    : '';
+  const smtpPass = !isPlaceholderSecret(process.env.SMTP_PASS)
+    ? process.env.SMTP_PASS!.trim()
+    : '';
+  const configuredFrom = !isPlaceholderSecret(process.env.EMAIL_FROM)
+    ? stripHeaderControls(process.env.EMAIL_FROM, 254)
+    : '';
+
+  if (resendKey) {
+    const fromHeader =
+      configuredFrom || 'Pro Placement by 3LLION <onboarding@resend.dev>';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: fromHeader,
+          to: [recipient],
+          subject,
+          html,
+          text,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (response.ok) {
+        RECENT_WELCOME_SEND_MS.set(recipient, Date.now());
+        return {
+          sent: true,
+          configured: true,
+          provider: 'resend',
+          recipient,
+          message: `Welcome email sent to ${recipient}.`,
+        };
+      }
+
+      const errBody = await response.text().catch(() => '');
+      console.warn(
+        `[WelcomeMailer] Resend delivery returned status ${response.status}: ${errBody.slice(0, 180)}`
+      );
+      if (!smtpUser || !smtpPass) {
+        return {
+          sent: false,
+          configured: true,
+          provider: 'resend',
+          recipient,
+          message: 'Email provider rejected the delivery request.',
+        };
+      }
+    } catch (err: any) {
+      clearTimeout(timer);
+      console.warn(
+        '[WelcomeMailer] Resend delivery attempt failed:',
+        err?.message || 'Unknown error'
+      );
+      if (!smtpUser || !smtpPass) {
+        return {
+          sent: false,
+          configured: true,
+          provider: 'resend',
+          recipient,
+          message: 'Email delivery request timed out.',
+        };
+      }
+    }
+  }
+
+  const inferredGmailHost =
+    !smtpHostRaw && /@(gmail|googlemail)\.com$/i.test(smtpUser)
+      ? 'smtp.gmail.com'
+      : smtpHostRaw;
+
+  if (inferredGmailHost && smtpUser && smtpPass) {
+    const parsedPort = Number(
+      process.env.SMTP_PORT || (inferredGmailHost === 'smtp.gmail.com' ? 465 : 587)
+    );
+    const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 465;
+    const secureEnv = (process.env.SMTP_SECURE || '').trim().toLowerCase();
+    const secure = secureEnv ? secureEnv === 'true' : port === 465;
+
+    const fromHeader =
+      configuredFrom || `Pro Placement by 3LLION <${smtpUser}>`;
+
+    try {
+      const transporter = nodemailer.createTransport({
+        host: inferredGmailHost,
+        port,
+        secure,
+        auth: {
+          user: smtpUser,
+          pass: smtpPass,
+        },
+        connectionTimeout: 5000,
+        greetingTimeout: 5000,
+        socketTimeout: 7000,
+      });
+
+      await transporter.sendMail({
+        from: fromHeader,
+        to: recipient,
+        subject,
+        text,
+        html,
+      });
+
+      RECENT_WELCOME_SEND_MS.set(recipient, Date.now());
+      return {
+        sent: true,
+        configured: true,
+        provider: 'smtp',
+        recipient,
+        message: `Welcome email sent to ${recipient}.`,
+      };
+    } catch (err: any) {
+      console.warn(
+        '[WelcomeMailer] SMTP delivery failed:',
+        err?.message || 'Unknown error'
+      );
+      return {
+        sent: false,
+        configured: true,
+        provider: 'smtp',
+        recipient,
+        message: 'Could not reach SMTP mail server.',
+      };
+    }
+  }
+
+  return {
+    sent: false,
+    configured: false,
+    provider: 'none',
+    recipient,
+    message: 'Email automation is ready once SMTP or Resend server secrets are set.',
+  };
 }
 
 // High-Security HTTP Headers & No-Leak Policy Middleware
@@ -236,12 +622,15 @@ hydrateCandidatesStore().catch(() => {});
 // Auth / Login Realtime API: Creates or retrieves actual user from Supabase & local store
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { name, email, university, graduationYear } = req.body;
-    if (!name || !email || !email.includes('@')) {
+    const { name, email, university, graduationYear, sendWelcomeEmail } = req.body || {};
+    if (!name || !email || typeof email !== 'string') {
       return res.status(400).json({ error: 'Valid candidate name and email address are required.' });
     }
 
     const normalizedEmail = sanitizeServerString(email, 254).toLowerCase();
+    if (!isValidCandidateEmail(normalizedEmail)) {
+      return res.status(400).json({ error: 'Please provide a valid candidate email address.' });
+    }
     const safeName = sanitizeServerString(name, 100) || 'Candidate';
     const safeUni =
       sanitizeServerString(university, 160) || 'Engineering Institution';
@@ -377,7 +766,43 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const sessionToken = createSessionToken(normalizedEmail);
-    return res.json({ success: true, user, sessionToken });
+
+    let welcomeEmail: WelcomeEmailResult | null = null;
+    if (sendWelcomeEmail !== false) {
+      try {
+        welcomeEmail = await Promise.race([
+          sendWelcomeGreetingEmail({
+            name: user.name,
+            email: user.email,
+            university: user.university,
+            graduationYear: user.graduationYear,
+          }),
+          new Promise<WelcomeEmailResult>((resolve) =>
+            setTimeout(
+              () =>
+                resolve({
+                  sent: false,
+                  configured: true,
+                  provider: 'none',
+                  recipient: user.email,
+                  message: 'Welcome email dispatch is continuing in the background.',
+                }),
+              4500
+            )
+          ),
+        ]);
+      } catch {
+        welcomeEmail = {
+          sent: false,
+          configured: false,
+          provider: 'none',
+          recipient: user.email,
+          message: 'Welcome email could not be queued at this moment.',
+        };
+      }
+    }
+
+    return res.json({ success: true, user, sessionToken, welcomeEmail });
   } catch {
     return res.status(500).json({ error: 'Failed to process candidate login' });
   }
@@ -655,6 +1080,486 @@ app.post('/api/community/heartbeat', (req, res) => {
   }
 });
 
+// ============================================================================
+// REAL-TIME ADMIN BROADCAST NOTIFICATIONS & SECURE ADMIN AUTHORIZATION
+// ============================================================================
+interface AdminBroadcastNotification {
+  id: string;
+  title: string;
+  message: string;
+  priority: 'info' | 'important' | 'urgent';
+  senderName: string;
+  targetTab?: string;
+  createdAt: string;
+}
+
+interface AdminClaimRecord {
+  salt: string;
+  hash: string;
+  claimedByEmail: string;
+  claimedAt: string;
+}
+
+const ADMIN_NOTIFICATIONS_PATH = path.join(
+  __dirname,
+  '.checkpoint_state',
+  'admin_notifications.json'
+);
+const ADMIN_CLAIM_PATH = path.join(
+  __dirname,
+  '.checkpoint_state',
+  'admin_claim.json'
+);
+const PRIMARY_ADMIN_EMAIL = (
+  process.env.ADMIN_EMAIL || 'bhargavab27@gmail.com'
+).trim().toLowerCase();
+
+let broadcastNotifications: AdminBroadcastNotification[] = [];
+const notificationSubscribers = new Set<express.Response>();
+
+function loadNotificationsFromDisk(): void {
+  try {
+    if (fs.existsSync(ADMIN_NOTIFICATIONS_PATH)) {
+      const raw = fs.readFileSync(ADMIN_NOTIFICATIONS_PATH, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        broadcastNotifications = parsed
+          .filter(
+            (n): n is AdminBroadcastNotification =>
+              n &&
+              typeof n.id === 'string' &&
+              typeof n.title === 'string' &&
+              typeof n.message === 'string'
+          )
+          .slice(0, 200);
+      }
+    }
+  } catch {
+    // Non-blocking
+  }
+}
+
+function saveNotificationsToDisk(): void {
+  try {
+    const dir = path.dirname(ADMIN_NOTIFICATIONS_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(
+      ADMIN_NOTIFICATIONS_PATH,
+      JSON.stringify(broadcastNotifications.slice(0, 200), null, 2),
+      'utf8'
+    );
+  } catch {
+    // Non-blocking
+  }
+}
+
+loadNotificationsFromDisk();
+
+function pushNotificationEventToSubscribers(payload: Record<string, unknown>): void {
+  const serialized = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const clientRes of notificationSubscribers) {
+    try {
+      clientRes.write(serialized);
+    } catch {
+      notificationSubscribers.delete(clientRes);
+    }
+  }
+}
+
+function getEnvAdminPasscode(): string {
+  const raw = process.env.ADMIN_PASSCODE || '';
+  const trimmed = raw.trim();
+  if (!trimmed || /^(MY_|your-|placeholder|changeme|example)/i.test(trimmed)) {
+    return '';
+  }
+  return trimmed;
+}
+
+function readAdminClaimRecord(): AdminClaimRecord | null {
+  try {
+    if (fs.existsSync(ADMIN_CLAIM_PATH)) {
+      const raw = fs.readFileSync(ADMIN_CLAIM_PATH, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.salt === 'string' && typeof parsed.hash === 'string') {
+        return parsed as AdminClaimRecord;
+      }
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
+}
+
+function writeAdminClaimRecord(record: AdminClaimRecord): void {
+  const dir = path.dirname(ADMIN_CLAIM_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(ADMIN_CLAIM_PATH, JSON.stringify(record, null, 2), 'utf8');
+}
+
+function verifyPasscodeAgainstServer(candidatePasscode: string): boolean {
+  const envPasscode = getEnvAdminPasscode();
+  if (envPasscode) {
+    const expectedDigest = crypto.createHash('sha256').update(envPasscode).digest();
+    const candidateDigest = crypto.createHash('sha256').update(candidatePasscode).digest();
+    return crypto.timingSafeEqual(expectedDigest, candidateDigest);
+  }
+  const claim = readAdminClaimRecord();
+  if (!claim) return false;
+  try {
+    const derived = crypto.scryptSync(candidatePasscode, claim.salt, 64);
+    const stored = Buffer.from(claim.hash, 'hex');
+    return derived.length === stored.length && crypto.timingSafeEqual(derived, stored);
+  } catch {
+    return false;
+  }
+}
+
+function createSignedAdminToken(email: string): string {
+  const exp = Date.now() + 8 * 60 * 60 * 1000; // 8 hours
+  const payload = Buffer.from(
+    JSON.stringify({ role: 'admin', email: email.toLowerCase(), exp })
+  ).toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', SERVER_SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifySignedAdminToken(token: string): { email: string } | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [payload, sig] = parts;
+  const expectedSig = crypto
+    .createHmac('sha256', SERVER_SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  try {
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expectedSig);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (decoded?.role !== 'admin' || typeof decoded?.exp !== 'number' || decoded.exp < Date.now()) {
+      return null;
+    }
+    return { email: String(decoded.email || PRIMARY_ADMIN_EMAIL) };
+  } catch {
+    return null;
+  }
+}
+
+function extractBearerAdmin(req: express.Request): { email: string } | null {
+  const authHeader = req.headers.authorization || '';
+  if (!authHeader.startsWith('Bearer ')) return null;
+  const token = authHeader.slice(7).trim();
+  return verifySignedAdminToken(token);
+}
+
+app.get('/api/admin/status', (req, res) => {
+  const envPasscode = getEnvAdminPasscode();
+  const claim = readAdminClaimRecord();
+  const candidateEmail = sanitizeServerString(
+    (req.query.email as string) || '',
+    254
+  ).toLowerCase();
+  const verifiedToken = extractBearerAdmin(req);
+  return res.json({
+    envPasscodeConfigured: Boolean(envPasscode),
+    isClaimed: Boolean(envPasscode || claim),
+    isPrimaryAdminEmail: Boolean(
+      candidateEmail && candidateEmail === PRIMARY_ADMIN_EMAIL
+    ),
+    isUnlocked: Boolean(verifiedToken),
+  });
+});
+
+app.post('/api/admin/claim', (req, res) => {
+  try {
+    if (getEnvAdminPasscode() || readAdminClaimRecord()) {
+      return res.status(409).json({
+        error: 'Admin broadcast key is already configured. Enter the existing passcode to unlock.',
+      });
+    }
+    const passcode = typeof req.body?.passcode === 'string' ? req.body.passcode.trim() : '';
+    const email = sanitizeServerString(req.body?.email || '', 254).toLowerCase() || PRIMARY_ADMIN_EMAIL;
+    if (passcode.length < 6 || passcode.length > 128) {
+      return res.status(400).json({
+        error: 'Admin passcode must be between 6 and 128 characters.',
+      });
+    }
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(passcode, salt, 64).toString('hex');
+    writeAdminClaimRecord({
+      salt,
+      hash,
+      claimedByEmail: email,
+      claimedAt: new Date().toISOString(),
+    });
+    const adminToken = createSignedAdminToken(email);
+    return res.json({ success: true, adminToken });
+  } catch {
+    return res.status(500).json({ error: 'Unable to configure admin broadcast key.' });
+  }
+});
+
+app.post('/api/admin/verify', (req, res) => {
+  try {
+    const passcode = typeof req.body?.passcode === 'string' ? req.body.passcode.trim() : '';
+    const email = sanitizeServerString(req.body?.email || '', 254).toLowerCase() || PRIMARY_ADMIN_EMAIL;
+    if (!passcode) {
+      return res.status(400).json({ error: 'Please enter the admin broadcast passcode.' });
+    }
+    if (!verifyPasscodeAgainstServer(passcode)) {
+      return res.status(403).json({ error: 'Invalid admin broadcast passcode.' });
+    }
+    const adminToken = createSignedAdminToken(email);
+    return res.json({ success: true, adminToken });
+  } catch {
+    return res.status(500).json({ error: 'Failed to verify admin passcode.' });
+  }
+});
+
+app.get('/api/notifications', (_req, res) => {
+  return res.json({
+    success: true,
+    notifications: broadcastNotifications,
+  });
+});
+
+app.get('/api/notifications/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  notificationSubscribers.add(res);
+  res.write(
+    `data: ${JSON.stringify({
+      type: 'init',
+      notifications: broadcastNotifications,
+    })}\n\n`
+  );
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': keepalive\n\n');
+    } catch {
+      clearInterval(heartbeat);
+      notificationSubscribers.delete(res);
+    }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    notificationSubscribers.delete(res);
+  });
+});
+
+app.post('/api/notifications/broadcast', (req, res) => {
+  const admin = extractBearerAdmin(req);
+  if (!admin) {
+    return res.status(401).json({
+      error: 'Admin verification required to broadcast notifications.',
+    });
+  }
+
+  const rawTitle = sanitizeServerString(req.body?.title, 120);
+  const rawMessage =
+    typeof req.body?.message === 'string'
+      ? req.body.message.replace(/[\0\r]/g, '').trim().slice(0, 800)
+      : '';
+  const rawPriority = req.body?.priority;
+  const priority: 'info' | 'important' | 'urgent' =
+    rawPriority === 'urgent' || rawPriority === 'important' ? rawPriority : 'info';
+  const rawTargetTab = sanitizeServerString(req.body?.targetTab || '', 24);
+  const allowedTabs = new Set([
+    '',
+    'contents',
+    'dsa',
+    'aptitude',
+    'voice',
+    'curriculum',
+    'interview',
+    'resume',
+    'arcade',
+  ]);
+  const targetTab = allowedTabs.has(rawTargetTab) ? rawTargetTab : '';
+  const senderName =
+    sanitizeServerString(req.body?.senderName, 80) || 'Admin · Pro Placement';
+
+  if (!rawTitle || !rawMessage) {
+    return res.status(400).json({
+      error: 'Notification headline and message are required.',
+    });
+  }
+
+  const notification: AdminBroadcastNotification = {
+    id: `notif_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
+    title: rawTitle,
+    message: rawMessage,
+    priority,
+    senderName,
+    targetTab: targetTab || undefined,
+    createdAt: new Date().toISOString(),
+  };
+
+  broadcastNotifications = [notification, ...broadcastNotifications].slice(0, 200);
+  saveNotificationsToDisk();
+  pushNotificationEventToSubscribers({ type: 'broadcast', notification });
+
+  return res.json({
+    success: true,
+    notification,
+    deliveredToConnectedUsers: notificationSubscribers.size,
+  });
+});
+
+app.delete('/api/notifications/:id', (req, res) => {
+  const admin = extractBearerAdmin(req);
+  if (!admin) {
+    return res.status(401).json({ error: 'Admin verification required.' });
+  }
+  const targetId = sanitizeServerString(req.params.id, 128);
+  const beforeLen = broadcastNotifications.length;
+  broadcastNotifications = broadcastNotifications.filter((n) => n.id !== targetId);
+  if (broadcastNotifications.length !== beforeLen) {
+    saveNotificationsToDisk();
+    pushNotificationEventToSubscribers({ type: 'delete', id: targetId });
+  }
+  return res.json({ success: true });
+});
+
+// ============================================================================
+// PRO PLACEMENT ACCURATE AI CHATBOT ENDPOINT (Server-Side @google/genai)
+// ============================================================================
+app.post('/api/chatbot/ask', async (req, res) => {
+  try {
+    const rawMessage =
+      typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    if (!rawMessage || rawMessage.length > 4000) {
+      return res.status(400).json({
+        error: 'Please enter a valid question (1 to 4000 characters).',
+      });
+    }
+
+    const activeApiKey = process.env.GEMINI_API_KEY;
+    const client =
+      ai ||
+      (activeApiKey
+        ? new GoogleGenAI({
+            apiKey: activeApiKey,
+            httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+          })
+        : null);
+
+    if (!client) {
+      return res.status(503).json({
+        error:
+          'Gemini API key is not configured. Please check GEMINI_API_KEY in Settings > Secrets.',
+      });
+    }
+
+    const rawHistory = Array.isArray(req.body?.history) ? req.body.history : [];
+    const safeHistory = rawHistory
+      .slice(-12)
+      .filter(
+        (item: any) =>
+          item &&
+          (item.role === 'user' || item.role === 'model') &&
+          typeof item.text === 'string' &&
+          item.text.trim().length > 0
+      )
+      .map((item: any) => ({
+        role: item.role as 'user' | 'model',
+        parts: [{ text: item.text.trim().slice(0, 4000) }],
+      }));
+
+    const userContext = req.body?.userContext || {};
+    const candidateName = sanitizeServerString(userContext.name || '', 80);
+    const activeSection = sanitizeServerString(userContext.activeTab || '', 40);
+
+    const systemInstruction = `You are the official AI Mentor and Assistant for Pro Placement (a complete engineering placement platform built by 3LLION, founded by Bhargava B).
+Your core mission is to answer ANY question asked by a user with high factual accuracy, clarity, and practical depth.
+
+Platform Reference Facts (if asked about Pro Placement):
+- Modules inside Pro Placement:
+  1. Course Syllabus (270-Day / 9-Month Placement Master Plan with daily tasks)
+  2. 3,000+ DSA Coding Hub (curated algorithmic problems across companies & patterns)
+  3. 10,000+ Aptitude Arena (quantitative, logical reasoning, verbal & timed placement mocks)
+  4. Executive Voice Coach (two-way spoken interview & English fluency coach with adaptive waveform & 2.5s auto-send)
+  5. Byte Runner (unlimited procedural Zip-style logic game)
+  6. Interview Prep Tips (technical & behavioral guides + company intelligence)
+  7. ATS Resume Builder & Scanner
+- 24-Hour Streak Rule: Candidates protect their active daily streak by solving daily tasks within 24 hours; inactivity beyond 24 hours resets the streak to zero unless Streak Shield is active.
+- Notification Bell: Shows Phone Streak Alerts and Admin Broadcast Announcements sent in real time to every user.
+
+Accuracy & Response Rules:
+1. For technical questions (DSA, Big-O time/space complexity, C++/Java/Python/JavaScript/TypeScript code, System Design, OS, DBMS, SQL, Computer Networks, OOP, Web Development), give exact, verified explanations and clean working code examples when helpful.
+2. For aptitude, math, science, or general knowledge questions, show step-by-step reasoning and verify arithmetic carefully before stating the final answer.
+3. Keep answers clear, well-structured, and direct—never invent facts, fake statistics, or nonexistent platform features.
+4. Do NOT ask users for API keys or expose internal environment/security configuration.${
+      candidateName ? `\nCandidate Name: ${candidateName}` : ''
+    }${activeSection ? `\nCurrent App Section: ${activeSection}` : ''}`;
+
+    const candidateModels = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+    let reply = '';
+    let lastModelErr: any = null;
+
+    for (const modelName of candidateModels) {
+      try {
+        const chat = client.chats.create({
+          model: modelName,
+          history: safeHistory,
+          config: {
+            systemInstruction,
+          },
+        });
+        const response = await chat.sendMessage({ message: rawMessage });
+        const textOut = (response.text || '').trim();
+        if (textOut) {
+          reply = textOut;
+          break;
+        }
+      } catch (err: any) {
+        lastModelErr = err;
+        const code = typeof err?.status === 'number' ? err.status : 500;
+        if (code === 401 || code === 403 || code === 400) {
+          throw err;
+        }
+      }
+    }
+
+    if (!reply) {
+      if (lastModelErr) {
+        throw lastModelErr;
+      }
+      return res.status(502).json({
+        error: 'The AI assistant returned an empty response. Please try again.',
+      });
+    }
+
+    return res.json({ success: true, reply });
+  } catch (err: any) {
+    const statusCode =
+      typeof err?.status === 'number' && err.status >= 400 && err.status < 600
+        ? err.status
+        : 500;
+    const message =
+      statusCode === 429
+        ? 'AI rate quota temporarily reached. Please wait a moment and try again.'
+        : statusCode === 401 || statusCode === 403
+        ? 'Gemini API key permission issue. Please check Settings > Secrets.'
+        : 'Unable to reach AI assistant right now. Please try again.';
+    console.error('Error in /api/chatbot/ask:', err?.message || err);
+    return res.status(statusCode).json({ error: message });
+  }
+});
+
 // Exact Brand Logo API: Serve and lock the default brand logo so no one can overwrite it once set
 app.get('/api/logo', (_req, res) => {
   try {
@@ -733,11 +1638,10 @@ Return valid JSON with the exact structure:
 }`;
 
         const aiResponse = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
+          model: 'gemini-4-hydrogen',
           contents: prompt,
           config: {
             responseMimeType: 'application/json',
-            temperature: 0.4,
           },
         });
 
@@ -1017,7 +1921,7 @@ function generateAccurateVoiceReply(
   };
 }
 
-// 1. Interactive Communication & Fluency Critique API (Instant Real-Time Accurate Reply)
+// 1. Interactive Communication & Voice Coach Answer API (Accurate Real-Time AI Response)
 app.post('/api/interview/feedback', async (req, res) => {
   try {
     const { question, userTranscript, modeTitle, dialogueHistory } = req.body;
@@ -1027,9 +1931,18 @@ app.post('/api/interview/feedback', async (req, res) => {
     }
 
     const trimmedInput = userTranscript.trim();
-    const cacheKey = trimmedInput.toLowerCase();
+    const recentHistorySlice = Array.isArray(dialogueHistory)
+      ? dialogueHistory.slice(-6)
+      : [];
+    const historySignature = recentHistorySlice
+      .map(
+        (e: { speaker?: string; text?: string }) =>
+          `${e.speaker || ''}:${(e.text || '').slice(0, 60)}`
+      )
+      .join('|');
+    const cacheKey = `${trimmedInput.toLowerCase()}__${historySignature.toLowerCase()}`;
 
-    // Check fast multi-user cache
+    // Serve only verified AI answers from cache (never canned templates)
     if (FEEDBACK_CACHE.has(cacheKey)) {
       return res.json(FEEDBACK_CACHE.get(cacheKey));
     }
@@ -1044,133 +1957,132 @@ app.post('/api/interview/feedback', async (req, res) => {
           })
         : null);
 
+    if (!client) {
+      return res.status(503).json({
+        error: 'Gemini API key is not configured. Please check Settings > Secrets.',
+      });
+    }
+
     const baseCritique = generateAccurateVoiceReply(
       trimmedInput,
       question,
       modeTitle
     );
 
-    if (client) {
-      const nowIso = new Date().toUTCString();
-      const historyContext = Array.isArray(dialogueHistory)
-        ? dialogueHistory
-            .slice(-5)
-            .map(
-              (entry: { speaker: string; text: string }) =>
-                `${entry.speaker === 'YOU' ? 'User' : 'Coach'}: ${entry.text}`
-            )
-            .join('\n')
-        : '';
+    const nowIso = new Date().toUTCString();
+    const historyContext = recentHistorySlice
+      .map(
+        (entry: { speaker: string; text: string }) =>
+          `${entry.speaker === 'YOU' ? 'User' : 'Coach'}: ${entry.text}`
+      )
+      .join('\n');
 
-      const systemInstruction = `You are an elite, highly knowledgeable voice coach and technical mentor from 3LLION Ventures.
-Your mission is to provide deep, factually exact, and authoritative answers to user queries, especially COMPLEX and technical questions:
-1. Complex Technical & Conceptual Questions (e.g., System Design, Distributed Systems, Operating Systems, Concurrency, Algorithms, Networking, Database internals, Cloud, AI, Math, Science):
-   - Provide a deeply accurate, intellectually rigorous explanation detailing the core mechanisms, exact terminology, architectural trade-offs, and implementation nuances.
-   - Never give vague, generic, or evasive summaries.
-   - For technical questions, deliver a clear, well-structured explanation of 3 to 5 spoken sentences (approx. 50 to 90 words).
-2. General, Everyday, or Behavioral Questions:
-   - Provide a direct, natural, and helpful spoken response of 1 to 3 sentences (approx. 25 to 50 words).
-3. Spoken Voice Constraint:
-   - "spokenReply" will be spoken out loud by text-to-speech. Use smooth, natural spoken conversational language only. Absolutely NO markdown, NO asterisks, NO bullet points, and NO hashtags in "spokenReply".
-4. Coaching Feedback:
-   - Provide genuine vocal delivery, phrasing, fluency, and grammatical critique.`;
+    const systemInstruction = `You are a highly accurate, knowledgeable AI Voice Coach inside Pro Placement.
+Your #1 priority is to directly and accurately answer the user's exact question or respond directly to what they just said.
+Rules:
+1. Read the user's utterance and conversation history carefully. Answer the EXACT topic they asked about (whether coding/DSA, math/aptitude, system design, core CS, science, geography, general knowledge, or interview practice). NEVER drift onto unrelated topics or give vague generic filler.
+2. Keep "spokenReply" clear, direct, factually accurate, and natural to hear aloud in 2 to 5 spoken sentences. Use plain conversational words only (no markdown, no asterisks, no bullet symbols, no hashtags).
+3. Alongside answering accurately in "spokenReply", fill out constructive coaching critique fields ("sectionToImprove", "fluencyCritique", "grammarCritique", "vocabularyCritique", "refinedVersion", and integer scores 1-10 / 0-100) tailored specifically to what the user said.`;
 
-      const userPrompt = `Current Date: ${nowIso}
-${historyContext ? `Conversation history:\n${historyContext}\n` : ''}
-User said: "${trimmedInput}"
+    const userPrompt = `Current Date: ${nowIso}
+${historyContext ? `Recent conversation history:\n${historyContext}\n\n` : ''}Latest user utterance: "${trimmedInput}"
 
-Respond ONLY with a valid JSON object matching this schema:
-{
-  "spokenReply": "Direct, factually deep, spoken answer explaining the question accurately without markdown or asterisks",
-  "refinedVersion": "Polished phrasing of what the user asked or said",
-  "sectionToImprove": "Specific, practical tip for their technical delivery, vocabulary, or speaking pacing",
-  "fluencyCritique": "Concise note on spoken rhythm and delivery speed",
-  "grammarCritique": "Concise note on grammar and sentence structure",
-  "vocabularyCritique": "Note on precision of technical or English vocabulary used",
-  "rating": 9,
-  "fluencyScore": 92,
-  "grammarScore": 95
-}`;
+Answer the user's exact question or statement accurately in "spokenReply" and evaluate their spoken phrasing in the JSON fields.`;
 
-      const callGeminiModel = async () => {
-        // Ultra-low latency voice models: gemini-2.5-flash with zero thinking budget for instant turnaround
-        const modelsToTry = ['gemini-2.5-flash', 'gemini-3.1-flash-lite'];
-        let lastError: any = null;
+    const attemptConfigs: Array<{ model: string; useLowThinking: boolean }> = [
+      { model: 'gemini-4-hydrogen', useLowThinking: true },
+      { model: 'gemini-3.1-flash-lite', useLowThinking: false },
+    ];
 
-        for (const modelName of modelsToTry) {
-          try {
-            const callPromise = client.models.generateContent({
-              model: modelName,
-              contents: userPrompt,
-              config: {
-                systemInstruction,
-                temperature: 0.15,
-                maxOutputTokens: 240,
-                responseMimeType: 'application/json',
-                thinkingConfig: { thinkingBudget: 0 },
+    let lastError: any = null;
+
+    for (const attempt of attemptConfigs) {
+      try {
+        const config: Record<string, any> = {
+          systemInstruction,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              spokenReply: {
+                type: Type.STRING,
+                description:
+                  'Direct, accurate, spoken answer addressing the user exact question in 2-5 plain sentences without markdown.',
               },
-            });
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('Model timeout')), 650)
-            );
-            const aiResponse = await Promise.race([callPromise, timeoutPromise]);
+              refinedVersion: { type: Type.STRING },
+              sectionToImprove: { type: Type.STRING },
+              fluencyCritique: { type: Type.STRING },
+              grammarCritique: { type: Type.STRING },
+              vocabularyCritique: { type: Type.STRING },
+              rating: { type: Type.INTEGER },
+              fluencyScore: { type: Type.INTEGER },
+              grammarScore: { type: Type.INTEGER },
+            },
+            required: ['spokenReply'],
+          },
+        };
+        if (attempt.useLowThinking) {
+          config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+        }
 
-            const rawText = (aiResponse.text || '').trim();
-            if (!rawText) continue;
+        const callPromise = client.models.generateContent({
+          model: attempt.model,
+          contents: userPrompt,
+          config,
+        });
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Model timeout')), 14000)
+        );
+        const aiResponse = await Promise.race([callPromise, timeoutPromise]);
 
-            let parsed: any = null;
-            try {
-              const cleanedJson = rawText
-                .replace(/^```json\s*/i, '')
-                .replace(/^```\s*/, '')
-                .replace(/\s*```$/, '')
-                .trim();
-              parsed = JSON.parse(cleanedJson);
-            } catch {
-              const plainSpoken = rawText.replace(/[*#_`~>]/g, '').trim();
-              if (plainSpoken) {
-                parsed = {
-                  ...baseCritique,
-                  spokenReply: plainSpoken,
-                };
-              }
-            }
+        const rawText = (aiResponse.text || '').trim();
+        if (!rawText) continue;
 
-            if (parsed && typeof parsed.spokenReply === 'string' && parsed.spokenReply.length > 5) {
-              return {
-                rating: typeof parsed.rating === 'number' ? parsed.rating : baseCritique.rating,
-                fluencyScore: typeof parsed.fluencyScore === 'number' ? parsed.fluencyScore : baseCritique.fluencyScore,
-                grammarScore: typeof parsed.grammarScore === 'number' ? parsed.grammarScore : baseCritique.grammarScore,
-                spokenReply: parsed.spokenReply.replace(/[*#_`~>]/g, '').trim(),
-                sectionToImprove: parsed.sectionToImprove || baseCritique.sectionToImprove,
-                fluencyCritique: parsed.fluencyCritique || baseCritique.fluencyCritique,
-                grammarCritique: parsed.grammarCritique || baseCritique.grammarCritique,
-                vocabularyCritique: parsed.vocabularyCritique || baseCritique.vocabularyCritique,
-                refinedVersion: parsed.refinedVersion || baseCritique.refinedVersion,
-              };
-            }
-          } catch (modelErr: any) {
-            lastError = modelErr;
-            continue;
+        let parsed: any = null;
+        try {
+          const cleanedJson = rawText
+            .replace(/^```json\s*/i, '')
+            .replace(/^```\s*/, '')
+            .replace(/\s*```$/, '')
+            .trim();
+          parsed = JSON.parse(cleanedJson);
+        } catch {
+          const plainSpoken = rawText.replace(/[*#_`~>]/g, '').trim();
+          if (plainSpoken) {
+            parsed = { spokenReply: plainSpoken };
           }
         }
 
-        throw lastError || new Error('All model attempts failed');
-      };
+        if (
+          parsed &&
+          typeof parsed.spokenReply === 'string' &&
+          parsed.spokenReply.trim().length > 2
+        ) {
+          const result = {
+            rating:
+              typeof parsed.rating === 'number'
+                ? parsed.rating
+                : baseCritique.rating,
+            fluencyScore:
+              typeof parsed.fluencyScore === 'number'
+                ? parsed.fluencyScore
+                : baseCritique.fluencyScore,
+            grammarScore:
+              typeof parsed.grammarScore === 'number'
+                ? parsed.grammarScore
+                : baseCritique.grammarScore,
+            spokenReply: parsed.spokenReply.replace(/[*#_`~>]/g, '').trim(),
+            sectionToImprove:
+              parsed.sectionToImprove || baseCritique.sectionToImprove,
+            fluencyCritique:
+              parsed.fluencyCritique || baseCritique.fluencyCritique,
+            grammarCritique:
+              parsed.grammarCritique || baseCritique.grammarCritique,
+            vocabularyCritique:
+              parsed.vocabularyCritique || baseCritique.vocabularyCritique,
+            refinedVersion: parsed.refinedVersion || baseCritique.refinedVersion,
+          };
 
-      try {
-        // Ultra-brisk 2.2-second timeout guard for instant user response
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Voice latency timeout')), 2200)
-        );
-
-        const result: any = await Promise.race([
-          callGeminiModel(),
-          timeoutPromise,
-        ]);
-
-        if (result && result.spokenReply) {
-          // Cache response in memory for high-performance multi-user reuse
           if (FEEDBACK_CACHE.size >= MAX_FEEDBACK_CACHE_ENTRIES) {
             const firstKey = FEEDBACK_CACHE.keys().next().value;
             if (firstKey) FEEDBACK_CACHE.delete(firstKey);
@@ -1178,17 +2090,39 @@ Respond ONLY with a valid JSON object matching this schema:
           FEEDBACK_CACHE.set(cacheKey, result);
           return res.json(result);
         }
-      } catch (err: any) {
-        console.warn('Gemini model error or timeout, using accurate fallback:', err?.message || err);
+      } catch (modelErr: any) {
+        lastError = modelErr;
+        const code = typeof modelErr?.status === 'number' ? modelErr.status : 500;
+        if (code === 401 || code === 403) {
+          return res.status(code).json({
+            error:
+              'Gemini API key permission issue. Please check Settings > Secrets.',
+          });
+        }
+        continue;
       }
     }
 
-    // Cache and return high-fidelity fallback response
-    FEEDBACK_CACHE.set(cacheKey, baseCritique);
-    return res.json(baseCritique);
+    const statusCode =
+      typeof lastError?.status === 'number' &&
+      lastError.status >= 400 &&
+      lastError.status < 600
+        ? lastError.status
+        : 503;
+    const errMsg =
+      statusCode === 429
+        ? 'Voice coach quota temporarily reached. Please wait a moment and ask again.'
+        : 'Could not reach AI Voice Coach right now. Please try asking again.';
+    console.warn(
+      'Voice feedback model attempts failed:',
+      lastError?.message || lastError
+    );
+    return res.status(statusCode).json({ error: errMsg });
   } catch (error: any) {
     console.error('Error in /api/interview/feedback:', error);
-    return res.status(500).json({ error: error.message || 'Internal server error' });
+    return res
+      .status(500)
+      .json({ error: error.message || 'Internal server error' });
   }
 });
 
@@ -1324,9 +2258,9 @@ app.post('/api/interview/transcribe', async (req, res) => {
       } catch (err1: any) {
         console.warn('gemini-3.5-transcribe attempt note:', err1?.message || err1);
         try {
-          transcript = await runTranscribe('gemini-3.8-flash');
+          transcript = await runTranscribe('gemini-4-hydrogen');
         } catch (err2: any) {
-          console.warn('gemini-3.8-flash attempt note:', err2?.message || err2);
+          console.warn('gemini-4-hydrogen transcribe note:', err2?.message || err2);
           transcript = '';
         }
       }
@@ -1368,11 +2302,10 @@ Return JSON with:
 }`;
 
         const aiResponse = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
+          model: 'gemini-4-hydrogen',
           contents: prompt,
           config: {
             responseMimeType: 'application/json',
-            temperature: 0.5,
           },
         });
 

@@ -15,6 +15,7 @@ import {
   Settings,
   X,
   HelpCircle,
+  Send,
 } from 'lucide-react';
 import { VoiceAccent, AccentConfig } from '../types';
 
@@ -79,8 +80,9 @@ export const GLOBAL_ACCENTS: AccentConfig[] = [
 ];
 
 const DEFAULT_MODE_TITLE = '';
-const PAUSE_AUTO_SEND_MS = 1500; // Snappy 1.5s natural pause auto-send
-const VOICE_RMS_THRESHOLD = 0.0035; // Sensitive silence gate calibrated for laptop & mobile phone microphones
+const PAUSE_AUTO_SEND_MS = 2500; // Reliable 2.5s natural silence auto-send
+const VOICE_RMS_MIN_FLOOR = 0.018; // Baseline RMS noise gate (adaptively raised in noisy rooms)
+const VOICE_FREQ_MIN_FLOOR = 24; // Baseline human vocal-band energy gate
 
 interface CritiqueResult {
   rating: number;
@@ -200,7 +202,7 @@ export const VoiceCoach: React.FC<{
 }> = ({ onSessionComplete }) => {
   const [selectedAccent, setSelectedAccent] = useState<VoiceAccent>('Indian');
   const [voiceGender, setVoiceGender] = useState<VoiceGender>('Female');
-  const [voiceSpeed, setVoiceSpeed] = useState<number>(1.75);
+  const [voiceSpeed, setVoiceSpeed] = useState<number>(1.5);
   const [currentCoachPrompt, setCurrentCoachPrompt] = useState<string>(
     SESSION_VOICE_STORE.currentCoachPrompt
   );
@@ -268,8 +270,13 @@ export const VoiceCoach: React.FC<{
   const micStartedAtRef = useRef<number>(0);
   const finalTranscriptRef = useRef<string>('');
   const interimTranscriptRef = useRef<string>('');
+  const lastSeenTranscriptRef = useRef<string>('');
   const lastSpeechActivityRef = useRef<number>(0);
   const speechEventBoostRef = useRef<number>(0);
+  const noiseFloorRmsRef = useRef<number>(0.008);
+  const noiseFloorFreqRef = useRef<number>(12);
+  const acousticSpeechActiveRef = useRef<boolean>(false);
+  const ttsWatchdogRef = useRef<any>(null);
 
   const dialogueLogRef = useRef<{ speaker: 'COACH' | 'YOU'; text: string }[]>(
     dialogueLog
@@ -358,7 +365,7 @@ export const VoiceCoach: React.FC<{
   const currentAccent =
     GLOBAL_ACCENTS.find((a) => a.id === selectedAccent) || GLOBAL_ACCENTS[0];
 
-  // High-Graphic Voice Wave Canvas — Active living waves when mic is listening; dynamic expansion on voice; calm baseline only when stopped
+  // High-Graphic Voice Wave Canvas — Completely flat horizontal line during silence; waves animate ONLY when voice is actively speaking
   useEffect(() => {
     const canvas = waveCanvasRef.current;
     if (!canvas) return;
@@ -378,8 +385,9 @@ export const VoiceCoach: React.FC<{
 
       ctx.clearRect(0, 0, w, h);
 
-      // Measure real-time voice energy from microphone analyser
+      // Measure real-time voice energy ONLY when speaking above adaptive ambient noise floor
       let targetEnergy = 0;
+      const sinceMicStart = Date.now() - micStartedAtRef.current;
 
       if (isListeningRef.current && analyserRef.current) {
         try {
@@ -399,59 +407,83 @@ export const VoiceCoach: React.FC<{
             freqSum += freqData[i];
           }
           const avgVoiceFreq = freqSum / 26; // 0..255
-          const freqNorm = Math.min(1, avgVoiceFreq / 40);
 
-          if (rms >= VOICE_RMS_THRESHOLD || avgVoiceFreq > 10) {
-            targetEnergy = Math.max(
-              0.42,
-              Math.min(1, (rms - VOICE_RMS_THRESHOLD) * 28 + freqNorm * 0.6 + 0.3)
+          // Calibrate ambient room/hardware noise floor during first 450ms of opening mic
+          if (sinceMicStart <= 450) {
+            noiseFloorRmsRef.current = noiseFloorRmsRef.current * 0.75 + rms * 0.25;
+            noiseFloorFreqRef.current = noiseFloorFreqRef.current * 0.75 + avgVoiceFreq * 0.25;
+            targetEnergy = 0;
+          } else {
+            const rmsGate = Math.max(
+              VOICE_RMS_MIN_FLOOR,
+              Math.min(0.065, noiseFloorRmsRef.current * 2.5 + 0.006)
             );
-          } else if (rms > 0.0018 || avgVoiceFreq > 4) {
-            targetEnergy = Math.min(0.38, (rms - 0.0018) * 18 + freqNorm * 0.28);
+            const freqGate = Math.max(
+              VOICE_FREQ_MIN_FLOOR,
+              Math.min(85, noiseFloorFreqRef.current * 1.85 + 8)
+            );
+
+            const isAcousticVoiceNow =
+              (rms >= rmsGate && avgVoiceFreq >= freqGate) ||
+              rms >= rmsGate * 1.45;
+
+            if (isAcousticVoiceNow) {
+              const rmsExcess = Math.max(0, rms - rmsGate);
+              const freqExcess = Math.max(0, avgVoiceFreq - freqGate) / 55;
+              targetEnergy = Math.max(
+                0.35,
+                Math.min(1, rmsExcess * 18 + freqExcess * 0.6 + 0.25)
+              );
+            } else {
+              // Slowly track true ambient silence floor without letting silence trigger wave motion
+              noiseFloorRmsRef.current = noiseFloorRmsRef.current * 0.98 + rms * 0.02;
+              noiseFloorFreqRef.current =
+                noiseFloorFreqRef.current * 0.98 + avgVoiceFreq * 0.02;
+              targetEnergy = 0;
+            }
           }
         } catch {
           targetEnergy = 0;
         }
       }
 
-      // Also respond if Web Speech API just emitted words or coach is speaking
-      if (speechEventBoostRef.current > 0.01) {
+      // Respond when Web Speech API freshly recognizes new words
+      if (isListeningRef.current && speechEventBoostRef.current > 0.04) {
         targetEnergy = Math.max(targetEnergy, speechEventBoostRef.current);
-        speechEventBoostRef.current *= 0.88;
+        speechEventBoostRef.current *= 0.84;
       } else {
         speechEventBoostRef.current = 0;
       }
 
+      // Respond when Voice Coach TTS is actively speaking
       if (isSpeakingRef.current) {
         const pulse =
-          0.45 +
-          0.25 * Math.sin(phase * 2.3) +
+          0.48 +
+          0.24 * Math.sin(phase * 2.3) +
           0.16 * Math.cos(phase * 3.7);
         targetEnergy = Math.max(targetEnergy, pulse);
       }
 
-      // Smooth attack and decay
-      if (targetEnergy > smoothedEnergy) {
-        smoothedEnergy = smoothedEnergy * 0.5 + targetEnergy * 0.5;
+      // Fast snap-to-zero decay when silent so waves settle immediately into a constant straight line
+      if (!isListeningRef.current && !isSpeakingRef.current) {
+        targetEnergy = 0;
+        smoothedEnergy = 0;
+      } else if (targetEnergy > smoothedEnergy) {
+        smoothedEnergy = smoothedEnergy * 0.45 + targetEnergy * 0.55;
       } else {
-        smoothedEnergy = smoothedEnergy * 0.84 + targetEnergy * 0.16;
+        smoothedEnergy = smoothedEnergy * 0.65 + targetEnergy * 0.35;
+        if (targetEnergy === 0 && smoothedEnergy < 0.05) {
+          smoothedEnergy = 0;
+        }
       }
 
-      // Subtle warm gold baseline guide in background
-      ctx.beginPath();
-      ctx.moveTo(0, midY);
-      ctx.lineTo(w, midY);
-      ctx.strokeStyle = 'rgba(217, 119, 6, 0.18)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // User rule: Waves must wave ONLY when speaking/voice is active; otherwise a constant steady line
+      // Strict rule: Waves move ONLY while human speech or coach voice is actively speaking
       const isVoiceActive =
-        (isListeningRef.current && (smoothedEnergy >= 0.04 || speechEventBoostRef.current > 0.03)) ||
-        (isSpeakingRef.current && smoothedEnergy >= 0.04);
+        (isListeningRef.current && sinceMicStart > 450 && smoothedEnergy >= 0.06) ||
+        (isSpeakingRef.current && smoothedEnergy >= 0.06);
 
       if (!isVoiceActive) {
-        // CONSTANT LINE: perfectly steady straight horizontal line when silent
+        // CONSTANT STEADY LINE: zero vertical wave motion during silence
         ctx.beginPath();
         ctx.moveTo(0, midY);
         ctx.lineTo(w, midY);
@@ -463,9 +495,17 @@ export const VoiceCoach: React.FC<{
         return;
       }
 
+      // Subtle guide baseline while wave is animating
+      ctx.beginPath();
+      ctx.moveTo(0, midY);
+      ctx.lineTo(w, midY);
+      ctx.strokeStyle = 'rgba(217, 119, 6, 0.16)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
       // Wave Motion: active ONLY when speech / voice is detected
       phase += 0.14 + smoothedEnergy * 0.16;
-      const maxAmp = Math.max(6, (h * 0.44) * smoothedEnergy);
+      const maxAmp = Math.max(6, h * 0.44 * smoothedEnergy);
 
       const layers = [
         {
@@ -685,7 +725,7 @@ export const VoiceCoach: React.FC<{
     };
   }, [isListening]);
 
-  // Real-Time Voice Activity Detection (VAD) & 2-Second Silence Auto-Send Loop
+  // Real-Time Voice Activity Detection (VAD) & Exact 2.5-Second Silence Auto-Send Loop
   useEffect(() => {
     if (!isListening || isAnalyzing) {
       setSilenceElapsedMs(0);
@@ -694,6 +734,7 @@ export const VoiceCoach: React.FC<{
     }
 
     const timeDomainBuf = new Uint8Array(128);
+    const freqBuf = new Uint8Array(32);
 
     const checkInterval = setInterval(() => {
       if (
@@ -712,11 +753,25 @@ export const VoiceCoach: React.FC<{
         interimTranscriptRef.current
       ).trim();
 
-      // 1. Check real microphone RMS voice amplitude for live wave & VAD (ignore first 350ms button tap)
+      // If Web Speech API emitted newly changed words, reset the 2.5s silence timer immediately
+      if (currentSpoken && currentSpoken !== lastSeenTranscriptRef.current) {
+        lastSeenTranscriptRef.current = currentSpoken;
+        hasRecordedVoiceRef.current = true;
+        lastSpeechActivityRef.current = Date.now();
+        setSilenceElapsedMs(0);
+        setVoiceDetectedActive(true);
+        return;
+      }
+
+      // Check microphone energy strictly above calibrated ambient noise floor
       const sinceMicStart = Date.now() - micStartedAtRef.current;
-      if (analyserRef.current && sinceMicStart > 350) {
+      let isCurrentlySpeakingAcoustic = false;
+
+      if (analyserRef.current && sinceMicStart > 450) {
         try {
           analyserRef.current.getByteTimeDomainData(timeDomainBuf);
+          analyserRef.current.getByteFrequencyData(freqBuf);
+
           let sumSq = 0;
           for (let i = 0; i < timeDomainBuf.length; i++) {
             const norm = (timeDomainBuf[i] - 128) / 128;
@@ -724,35 +779,52 @@ export const VoiceCoach: React.FC<{
           }
           const rms = Math.sqrt(sumSq / timeDomainBuf.length);
 
-          let freqEnergy = 0;
-          try {
-            const freqBuf = new Uint8Array(32);
-            analyserRef.current.getByteFrequencyData(freqBuf);
-            let fSum = 0;
-            for (let i = 2; i < 28; i++) fSum += freqBuf[i];
-            freqEnergy = fSum / 26;
-          } catch {}
+          let fSum = 0;
+          for (let i = 2; i < 28; i++) fSum += freqBuf[i];
+          const freqEnergy = fSum / 26;
 
-          if (rms >= VOICE_RMS_THRESHOLD || freqEnergy > 10) {
-            voiceFrameCountRef.current += 1;
-            // Require 2 frames (~160ms) of speech so user voice is immediately registered
-            if (voiceFrameCountRef.current >= 2) {
-              hasRecordedVoiceRef.current = true;
-            }
-            lastSpeechActivityRef.current = Date.now();
-            setSilenceElapsedMs(0);
-            setVoiceDetectedActive(true);
-            return;
-          } else {
-            setVoiceDetectedActive(false);
-          }
+          const rmsGate = Math.max(
+            VOICE_RMS_MIN_FLOOR,
+            Math.min(0.065, noiseFloorRmsRef.current * 2.5 + 0.006)
+          );
+          const freqGate = Math.max(
+            VOICE_FREQ_MIN_FLOOR,
+            Math.min(85, noiseFloorFreqRef.current * 1.85 + 8)
+          );
+
+          isCurrentlySpeakingAcoustic =
+            (rms >= rmsGate && freqEnergy >= freqGate) || rms >= rmsGate * 1.45;
         } catch {
-          // Ignore analyser read error
+          isCurrentlySpeakingAcoustic = false;
         }
       }
 
+      if (isCurrentlySpeakingAcoustic) {
+        voiceFrameCountRef.current += 1;
+        acousticSpeechActiveRef.current = voiceFrameCountRef.current >= 2;
+        if (acousticSpeechActiveRef.current) {
+          if (!recognitionRef.current || speechRecognitionFailedRef.current) {
+            hasRecordedVoiceRef.current = true;
+          }
+          lastSpeechActivityRef.current = Date.now();
+          setSilenceElapsedMs(0);
+          setVoiceDetectedActive(true);
+          return;
+        }
+      } else {
+        voiceFrameCountRef.current = 0;
+        acousticSpeechActiveRef.current = false;
+        setVoiceDetectedActive(false);
+      }
+
+      const usingFallbackRecorder =
+        (!recognitionRef.current || speechRecognitionFailedRef.current) &&
+        mediaRecorderRef.current?.state === 'recording' &&
+        hasRecordedVoiceRef.current &&
+        audioChunksRef.current.length > 0;
+
       const hasValidSpeechToSend =
-        currentSpoken.length > 0 || hasRecordedVoiceRef.current || audioChunksRef.current.length > 0;
+        currentSpoken.length > 0 || usingFallbackRecorder;
 
       if (!hasValidSpeechToSend || lastSpeechActivityRef.current === 0) {
         setSilenceElapsedMs(0);
@@ -762,19 +834,17 @@ export const VoiceCoach: React.FC<{
       const elapsed = Date.now() - lastSpeechActivityRef.current;
       setSilenceElapsedMs(Math.min(PAUSE_AUTO_SEND_MS, elapsed));
 
-      // Automatically send after pause of no voice
+      // Automatically send after 2.5 seconds of continuous silence
       if (elapsed >= PAUSE_AUTO_SEND_MS) {
         lastSpeechActivityRef.current = 0;
         voiceFrameCountRef.current = 0;
+        lastSeenTranscriptRef.current = '';
         setSilenceElapsedMs(0);
 
         if (currentSpoken) {
           hasRecordedVoiceRef.current = false;
           submitSpokenText(currentSpoken, true);
-        } else if (
-          mediaRecorderRef.current &&
-          mediaRecorderRef.current.state === 'recording'
-        ) {
+        } else if (usingFallbackRecorder) {
           hasRecordedVoiceRef.current = false;
           stopAndTranscribeMediaRecorder(true);
         }
@@ -884,6 +954,11 @@ export const VoiceCoach: React.FC<{
     isSpeakingRef.current = false;
     setIsSpeaking(false);
 
+    if (ttsWatchdogRef.current) {
+      clearInterval(ttsWatchdogRef.current);
+      ttsWatchdogRef.current = null;
+    }
+
     if (autoResumeTimerRef.current) {
       clearTimeout(autoResumeTimerRef.current);
       autoResumeTimerRef.current = null;
@@ -962,6 +1037,7 @@ export const VoiceCoach: React.FC<{
 
     finalTranscriptRef.current = '';
     interimTranscriptRef.current = '';
+    lastSeenTranscriptRef.current = '';
     setLivePreviewWords('');
   };
 
@@ -1013,15 +1089,11 @@ export const VoiceCoach: React.FC<{
         utterance.voice = chosenVoice;
       }
 
-      utterance.onstart = () => {
-        if (userManuallyStoppedRef.current) {
-          window.speechSynthesis.cancel();
-          return;
+      const finishPlayback = () => {
+        if (ttsWatchdogRef.current) {
+          clearInterval(ttsWatchdogRef.current);
+          ttsWatchdogRef.current = null;
         }
-        isSpeakingRef.current = true;
-        setIsSpeaking(true);
-      };
-      utterance.onend = () => {
         activeUtteranceRef.current = null;
         isSpeakingRef.current = false;
         setIsSpeaking(false);
@@ -1038,16 +1110,49 @@ export const VoiceCoach: React.FC<{
             ) {
               startMicrophoneCapture();
             }
-          }, 400);
+          }, 550);
         }
       };
+
+      const startedAt = Date.now();
+      const maxSafetyMs = Math.max(4500, Math.min(28000, spokenText.length * 110));
+
+      utterance.onstart = () => {
+        if (userManuallyStoppedRef.current) {
+          window.speechSynthesis.cancel();
+          return;
+        }
+        isSpeakingRef.current = true;
+        setIsSpeaking(true);
+      };
+      utterance.onend = finishPlayback;
       utterance.onerror = () => {
+        if (ttsWatchdogRef.current) {
+          clearInterval(ttsWatchdogRef.current);
+          ttsWatchdogRef.current = null;
+        }
         activeUtteranceRef.current = null;
         isSpeakingRef.current = false;
         setIsSpeaking(false);
       };
 
       window.speechSynthesis.speak(utterance);
+
+      // Watchdog prevents isSpeakingRef / waveform from ever getting stuck if mobile browser omits onend
+      ttsWatchdogRef.current = setInterval(() => {
+        if (userManuallyStoppedRef.current) {
+          clearInterval(ttsWatchdogRef.current);
+          ttsWatchdogRef.current = null;
+          return;
+        }
+        const elapsed = Date.now() - startedAt;
+        if (
+          elapsed > 600 &&
+          (!window.speechSynthesis.speaking || elapsed > maxSafetyMs)
+        ) {
+          finishPlayback();
+        }
+      }, 250);
     } catch {
       isSpeakingRef.current = false;
       setIsSpeaking(false);
@@ -1181,6 +1286,7 @@ export const VoiceCoach: React.FC<{
     isListeningRef.current = false;
     hasRecordedVoiceRef.current = false;
     voiceFrameCountRef.current = 0;
+    acousticSpeechActiveRef.current = false;
     speechEventBoostRef.current = 0;
     setIsListening(false);
     setVoiceDetectedActive(false);
@@ -1405,15 +1511,65 @@ export const VoiceCoach: React.FC<{
     // Clear any stale partial transcripts from prior turns so only fresh speech is sent
     finalTranscriptRef.current = '';
     interimTranscriptRef.current = '';
+    lastSeenTranscriptRef.current = '';
     lastSpeechActivityRef.current = 0;
     hasRecordedVoiceRef.current = false;
+    acousticSpeechActiveRef.current = false;
     voiceFrameCountRef.current = 0;
+    noiseFloorRmsRef.current = 0.008;
+    noiseFloorFreqRef.current = 12;
     micStartedAtRef.current = Date.now();
     setLivePreviewWords('');
     setSilenceElapsedMs(0);
 
     isListeningRef.current = true;
     setIsListening(true);
+
+    const startFallbackRecorderOnStream = () => {
+      if (
+        !mediaStreamRef.current ||
+        typeof MediaRecorder === 'undefined' ||
+        (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive')
+      ) {
+        return;
+      }
+      try {
+        audioChunksRef.current = [];
+        let mimeType = '';
+        const candidateTypes = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/mp4',
+          'audio/aac',
+          'audio/ogg',
+          'audio/wav',
+        ];
+        if (MediaRecorder.isTypeSupported) {
+          for (const t of candidateTypes) {
+            if (MediaRecorder.isTypeSupported(t)) {
+              mimeType = t;
+              break;
+            }
+          }
+        }
+        const recorder = mimeType
+          ? new MediaRecorder(mediaStreamRef.current, { mimeType })
+          : new MediaRecorder(mediaStreamRef.current);
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            audioChunksRef.current.push(e.data);
+          }
+        };
+        mediaRecorderRef.current = recorder;
+        try {
+          recorder.start(100);
+        } catch {
+          recorder.start();
+        }
+      } catch {
+        // Non-blocking
+      }
+    };
 
     // 1. Start Web Speech API directly on the user gesture for zero-latency recognition
     const startSpeechRecognitionInstance = (): boolean => {
@@ -1455,11 +1611,10 @@ export const VoiceCoach: React.FC<{
           }
 
           if (finalChunk.trim()) {
-            const updatedFinal = (
-              finalTranscriptRef.current
+            const updatedFinal =
+              (finalTranscriptRef.current
                 ? finalTranscriptRef.current + ' '
-                : ''
-            ) + finalChunk.trim();
+                : '') + finalChunk.trim();
             finalTranscriptRef.current = updatedFinal;
             analyzeSpeechTelemetry(updatedFinal);
           }
@@ -1471,7 +1626,8 @@ export const VoiceCoach: React.FC<{
           ).trim();
           setLivePreviewWords(combined);
 
-          if (finalChunk.trim() || interimChunk.trim()) {
+          if ((finalChunk.trim() || interimChunk.trim()) && combined !== lastSeenTranscriptRef.current) {
+            lastSeenTranscriptRef.current = combined;
             hasRecordedVoiceRef.current = true;
             speechEventBoostRef.current = 0.85;
             lastSpeechActivityRef.current = Date.now();
@@ -1485,10 +1641,16 @@ export const VoiceCoach: React.FC<{
           if (e?.error === 'no-speech') {
             return;
           }
-          if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
+          if (
+            e?.error === 'network' ||
+            e?.error === 'audio-capture' ||
+            e?.error === 'service-not-allowed' ||
+            e?.error === 'not-allowed'
+          ) {
             speechRecognitionFailedRef.current = true;
-            // Only show permission guide if we also failed to get real microphone stream
-            if (!mediaStreamRef.current) {
+            if (mediaStreamRef.current && e?.error !== 'not-allowed') {
+              startFallbackRecorderOnStream();
+            } else if (!mediaStreamRef.current) {
               setMicPermissionError(
                 'Microphone permission was denied. Tap "Where to Turn On" or allow microphone access in your phone/browser.'
               );
@@ -1527,13 +1689,22 @@ export const VoiceCoach: React.FC<{
 
     speechRecognitionFailedRef.current = false;
 
-    // 1. First, start audio stream & visualizer analyser with MediaRecorder active in background
-    const audioStreamOk = await startAudioStreamAndRecorder(true);
+    const SpeechRecognitionCtor =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+    const speechRecSupported = Boolean(SpeechRecognitionCtor);
 
-    // 2. Start Web Speech API directly on top of granted microphone
+    // 1. Start audio stream & visualizer analyser; only run MediaRecorder concurrently when Web Speech isn't supported
+    const audioStreamOk = await startAudioStreamAndRecorder(!speechRecSupported);
+
+    // 2. Start Web Speech API on top of granted microphone
     let speechRecOk = false;
-    if (audioStreamOk || navigator.mediaDevices) {
+    if (speechRecSupported && (audioStreamOk || navigator.mediaDevices)) {
       speechRecOk = startSpeechRecognitionInstance();
+      if (!speechRecOk && audioStreamOk) {
+        speechRecognitionFailedRef.current = true;
+        startFallbackRecorderOnStream();
+      }
     }
 
     // If both failed to get mic access, reset listening state so user is not stuck
@@ -1819,6 +1990,7 @@ export const VoiceCoach: React.FC<{
     // Clear input buffers immediately
     finalTranscriptRef.current = '';
     interimTranscriptRef.current = '';
+    lastSeenTranscriptRef.current = '';
     lastSpeechActivityRef.current = 0;
     hasRecordedVoiceRef.current = false;
     setLivePreviewWords('');
@@ -1846,18 +2018,13 @@ export const VoiceCoach: React.FC<{
     try {
       const controller = new AbortController();
       activeAbortControllerRef.current = controller;
+      const clientAbortTimer = setTimeout(() => {
+        try {
+          controller.abort();
+        } catch {}
+      }, 22000);
 
-      // Ultra-fast 500ms client timeout guard so user receives an instant reply with zero perceived delay
-      const timeoutPromise = new Promise<{ ok: boolean; json: () => Promise<any> }>((resolve) => {
-        setTimeout(() => {
-          resolve({
-            ok: false,
-            json: async () => immediateLocalCritique,
-          });
-        }, 6000);
-      });
-
-      const fetchPromise = fetch('/api/interview/feedback', {
+      const res = await fetch('/api/interview/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1870,7 +2037,7 @@ export const VoiceCoach: React.FC<{
         signal: controller.signal,
       });
 
-      const res = await Promise.race([fetchPromise, timeoutPromise]);
+      clearTimeout(clientAbortTimer);
 
       if (userManuallyStoppedRef.current) {
         return;
@@ -1883,33 +2050,52 @@ export const VoiceCoach: React.FC<{
 
       const localFallback = immediateLocalCritique;
 
-      const finalCritique: CritiqueResult =
-        res.ok && data && typeof data.spokenReply === 'string' && data.spokenReply.length > 5
-          ? {
-              rating: typeof data.rating === 'number' ? data.rating : localFallback.rating,
-              fluencyScore: typeof data.fluencyScore === 'number' ? data.fluencyScore : localFallback.fluencyScore,
-              grammarScore:
-                typeof data.grammarScore === 'number'
-                  ? data.grammarScore
-                  : typeof data.starMethodScore === 'number'
-                  ? data.starMethodScore
-                  : localFallback.grammarScore,
-              vocabularyScore: localFallback.vocabularyScore,
-              clarityScore: localFallback.clarityScore,
-              confidenceScore: localFallback.confidenceScore,
-              spokenReply: data.spokenReply,
-              sectionToImprove:
-                data.sectionToImprove || localFallback.sectionToImprove,
-              fluencyCritique:
-                data.fluencyCritique || localFallback.fluencyCritique,
-              grammarCritique:
-                data.grammarCritique || localFallback.grammarCritique,
-              vocabularyCritique:
-                data.vocabularyCritique || localFallback.vocabularyCritique,
-              refinedVersion:
-                data.refinedVersion || localFallback.refinedVersion,
-            }
-          : localFallback;
+      if (!res.ok || !data || typeof data.spokenReply !== 'string' || data.spokenReply.trim().length < 2) {
+        const errorReply =
+          (typeof data?.error === 'string' && data.error) ||
+          'I could not reach the AI Voice Coach right now. Please try asking your question again.';
+        const errCritique: CritiqueResult = {
+          ...localFallback,
+          spokenReply: errorReply,
+        };
+        setCritique(errCritique);
+        const errLog = [
+          ...updatedUserLog,
+          { speaker: 'COACH' as const, text: errorReply },
+        ];
+        dialogueLogRef.current = errLog;
+        setDialogueLog(errLog);
+        setCurrentCoachPrompt(errorReply);
+        if (!userManuallyStoppedRef.current) {
+          speakText(errorReply, wasListening);
+        }
+        return;
+      }
+
+      const finalCritique: CritiqueResult = {
+        rating: typeof data.rating === 'number' ? data.rating : localFallback.rating,
+        fluencyScore: typeof data.fluencyScore === 'number' ? data.fluencyScore : localFallback.fluencyScore,
+        grammarScore:
+          typeof data.grammarScore === 'number'
+            ? data.grammarScore
+            : typeof data.starMethodScore === 'number'
+            ? data.starMethodScore
+            : localFallback.grammarScore,
+        vocabularyScore: localFallback.vocabularyScore,
+        clarityScore: localFallback.clarityScore,
+        confidenceScore: localFallback.confidenceScore,
+        spokenReply: data.spokenReply.trim(),
+        sectionToImprove:
+          data.sectionToImprove || localFallback.sectionToImprove,
+        fluencyCritique:
+          data.fluencyCritique || localFallback.fluencyCritique,
+        grammarCritique:
+          data.grammarCritique || localFallback.grammarCritique,
+        vocabularyCritique:
+          data.vocabularyCritique || localFallback.vocabularyCritique,
+        refinedVersion:
+          data.refinedVersion || localFallback.refinedVersion,
+      };
 
       setCritique(finalCritique);
       const nextLog = [
@@ -1929,17 +2115,21 @@ export const VoiceCoach: React.FC<{
       if (userManuallyStoppedRef.current) {
         return;
       }
-      const fallback = immediateLocalCritique;
-      setCritique(fallback);
+      const retryReply =
+        'Unable to reach the AI Voice Coach right now. Please check your connection and try asking again.';
+      const errCritique: CritiqueResult = {
+        ...immediateLocalCritique,
+        spokenReply: retryReply,
+      };
+      setCritique(errCritique);
       const nextLog = [
         ...updatedUserLog,
-        { speaker: 'COACH' as const, text: fallback.spokenReply },
+        { speaker: 'COACH' as const, text: retryReply },
       ];
       dialogueLogRef.current = nextLog;
       setDialogueLog(nextLog);
-      setCurrentCoachPrompt(fallback.spokenReply);
-      speakText(fallback.spokenReply, wasListening);
-      if (onSessionComplete) onSessionComplete();
+      setCurrentCoachPrompt(retryReply);
+      speakText(retryReply, wasListening);
     } finally {
       isAnalyzingRef.current = false;
       setIsAnalyzing(false);
@@ -2269,8 +2459,8 @@ export const VoiceCoach: React.FC<{
                     >
                       {isListening
                         ? voiceDetectedActive
-                          ? 'Active Voice Detected · Real-Time Wave'
-                          : 'Listening (Silence · Natural Pause Auto-Send)'
+                          ? 'Active Voice Detected · Waves In Motion'
+                          : 'Listening · Waiting for Voice (2.5s Pause Auto-Send)'
                         : isTranscribingAudio
                         ? 'Sending Your Voice...'
                         : isSpeaking
@@ -2284,14 +2474,14 @@ export const VoiceCoach: React.FC<{
                 </span>
               </div>
 
-              {/* Natural Pause Auto-Send Countdown Bar */}
-              {silenceElapsedMs > 150 && (
+              {/* Natural 2.5s Silence Auto-Send Countdown Bar */}
+              {silenceElapsedMs > 120 && (
                 <div className="w-full pt-1 space-y-1">
                   <div className="flex items-center justify-between text-[11px] font-semibold text-amber-800">
                     <span className="flex items-center gap-1.5">
                       <Clock className="w-3.5 h-3.5 text-amber-600" />
                       <span>
-                        Natural pause detected — auto-evaluating in{' '}
+                        2.5s silence pause detected — auto-sending in{' '}
                         {remainingPauseSeconds}s...
                       </span>
                     </span>
@@ -2370,7 +2560,7 @@ export const VoiceCoach: React.FC<{
                   {isListening ? (
                     <>
                       <Mic className="w-4 h-4 animate-bounce" />
-                      <span>Listening (Auto-Send)</span>
+                      <span>Listening (2.5s Auto-Send)</span>
                     </>
                   ) : (
                     <>
@@ -2379,6 +2569,17 @@ export const VoiceCoach: React.FC<{
                     </>
                   )}
                 </button>
+
+                {isListening && livePreviewWords.trim().length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => submitSpokenText(livePreviewWords.trim(), true)}
+                    className="flex items-center gap-1.5 px-4 py-3.5 rounded-xl text-xs sm:text-sm font-bold bg-stone-900 hover:bg-stone-800 text-white transition shadow-sm cursor-pointer"
+                  >
+                    <Send className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Send Now</span>
+                  </button>
+                )}
 
                 <button
                   type="button"

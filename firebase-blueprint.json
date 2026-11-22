@@ -140,6 +140,56 @@
         }
       },
       "required": ["ownerId", "problemId", "category", "createdAt"]
+    },
+    "AdminNotification": {
+      "title": "AdminNotification",
+      "description": "Global admin broadcast notification visible in every candidate notification bell",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Authenticated admin UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Notification headline",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "message": {
+          "type": "string",
+          "description": "Notification message body",
+          "minLength": 1,
+          "maxLength": 800
+        },
+        "priority": {
+          "type": "string",
+          "description": "info, important, or urgent",
+          "enum": ["info", "important", "urgent"],
+          "minLength": 4,
+          "maxLength": 16
+        },
+        "isBroadcast": {
+          "type": "boolean",
+          "description": "Whether notification is broadcast to all users"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when published"
+        }
+      },
+      "required": [
+        "ownerId",
+        "title",
+        "message",
+        "priority",
+        "isBroadcast",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -154,6 +204,10 @@
     "/users/{userId}/solvedProblems/{problemId}": {
       "schema": { "$ref": "#/entities/SolvedProblemRecord" },
       "description": "Subcollection of solved DSA and Aptitude problems for a candidate"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/AdminNotification" },
+      "description": "Global admin broadcast notifications delivered to every user"
     }
   }
 }

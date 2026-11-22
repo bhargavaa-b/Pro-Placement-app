@@ -1,10 +1,10 @@
 [
   {
-    "id": "cand-1790345657272-ljarn",
+    "id": "e40f4cce-f8f5-4fdf-8051-b42a1092404c",
     "name": "Bhargava B",
     "email": "bhargavab27@gmail.com",
     "university": "Sapthagiri NPS University",
-    "graduationYear": "2026",
+    "graduationYear": "2029",
     "dreamCompany": "",
     "targetPackage": "",
     "targetRole": "",
@@ -25,7 +25,30 @@
       "apt_1790781286116_7",
       "apt_1790781288906_8",
       "apt_1790781291431_9",
-      "apt_1790781294052_10"
+      "apt_1790781294052_10",
+      "apt_1791391762215_11",
+      "apt_1791475750251_12",
+      "apt_1791475754690_13",
+      "apt_1791475756783_14",
+      "apt_1791475759015_15",
+      "apt_1791475760564_16",
+      "apt_1791475763110_17",
+      "apt_1791475765129_18",
+      "apt_1791475766892_19",
+      "apt_1791475769043_20",
+      "apt_1791530443823_21",
+      "apt_1791530456607_22",
+      "apt_1791530464089_23",
+      "apt_1791530471836_24",
+      "apt_1791530518406_25",
+      "apt_1791794777148_26",
+      "apt_1791794792925_27",
+      "apt_1791794801842_28",
+      "apt_1791799007806_29",
+      "apt_1791861153415_30",
+      "apt_1791862076150_31",
+      "apt_1793624555225_32",
+      "apt_1793694793755_33"
     ],
     "bookmarkedDSAIds": [],
     "dailyTasksCompleted": {
@@ -35,16 +58,9 @@
       "streakShieldChecked": false
     },
     "highGameScore": 32629,
-    "lastActiveDate": "2026-10-01",
+    "lastActiveDate": "2026-11-03T08:33:13.756+00:00",
     "lastHeartbeatMs": 1790865966844,
-    "createdAt": "2026-09-26T16:03:08.871149+00:00",
-    "consentGiven": true,
-    "avatarSeed": "bhargava b",
-    "lastStreakDate": "2026-10-01",
-    "dailyTasksDate": "2026-10-01",
-    "loginStartDate": "2026-09-26",
-    "mockTestsTaken": 0,
-    "avgMockAccuracy": 0
+    "createdAt": "2026-09-26T16:03:08.871149+00:00"
   },
   {
     "id": "548f9246-afbd-40a0-8bee-a5ae95d5b8f6",
@@ -72,5 +88,55 @@
     "lastActiveDate": "2026-09-28T14:46:21.495+00:00",
     "lastHeartbeatMs": 1790861430558,
     "createdAt": "2026-09-28T14:39:58.641627+00:00"
+  },
+  {
+    "id": "667324c7-f9b8-435c-a98a-f4659c3f100b",
+    "name": "Likhith yadav",
+    "email": "likhithyada89@gmail.com",
+    "university": "SNPSU",
+    "graduationYear": "2029",
+    "dreamCompany": "",
+    "targetPackage": "",
+    "targetRole": "",
+    "streakDays": 0,
+    "streakShieldActive": false,
+    "solvedDSAIds": [],
+    "solvedAptitudeIds": [],
+    "bookmarkedDSAIds": [],
+    "dailyTasksCompleted": {
+      "dsaToday": false,
+      "aptitudeToday": false,
+      "commToday": false,
+      "streakShieldChecked": false
+    },
+    "highGameScore": 0,
+    "lastActiveDate": "2026-10-09T10:04:20.511+00:00",
+    "lastHeartbeatMs": 1795249229887,
+    "createdAt": "2026-10-09T10:04:19.45697+00:00"
+  },
+  {
+    "id": "e2f0bfa0-38a8-4d41-8be8-5370a1629320",
+    "name": "Bhargava Test",
+    "email": "candidate@example.com",
+    "university": "IIT Madras",
+    "graduationYear": "2026",
+    "dreamCompany": "",
+    "targetPackage": "",
+    "targetRole": "",
+    "streakDays": 0,
+    "streakShieldActive": false,
+    "solvedDSAIds": [],
+    "solvedAptitudeIds": [],
+    "bookmarkedDSAIds": [],
+    "dailyTasksCompleted": {
+      "dsaToday": false,
+      "aptitudeToday": false,
+      "commToday": false,
+      "streakShieldChecked": false
+    },
+    "highGameScore": 0,
+    "lastActiveDate": "2026-11-21T08:23:08.054+00:00",
+    "lastHeartbeatMs": 1795249388053,
+    "createdAt": "2026-11-21T08:23:08.366528+00:00"
   }
 ]

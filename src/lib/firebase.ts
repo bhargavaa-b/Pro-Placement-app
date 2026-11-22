@@ -383,3 +383,88 @@ export function subscribeCandidateFromFirestore(
   return unsubscribe;
 }
 
+export interface FirestoreBroadcastNotification {
+  id: string;
+  title: string;
+  message: string;
+  priority: 'info' | 'important' | 'urgent';
+  createdAt: string;
+}
+
+export async function publishBroadcastNotificationToFirestore(payload: {
+  id: string;
+  title: string;
+  message: string;
+  priority: 'info' | 'important' | 'urgent';
+}): Promise<boolean> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.emailVerified) return false;
+  const uid = sanitizeId(currentUser.uid);
+  const notifId = sanitizeId(payload.id);
+  if (!ID_PATTERN.test(uid) || !ID_PATTERN.test(notifId)) return false;
+
+  const docPath = `notifications/${notifId}`;
+  try {
+    await setDoc(doc(db, 'notifications', notifId), {
+      ownerId: uid,
+      title: payload.title.trim().slice(0, 120),
+      message: payload.message.trim().slice(0, 800),
+      priority: payload.priority,
+      isBroadcast: true,
+      createdAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    try {
+      handleFirestoreError(error, OperationType.CREATE, docPath);
+    } catch {
+      return false;
+    }
+  }
+}
+
+export function subscribeAdminNotificationsFromFirestore(
+  callback: (items: FirestoreBroadcastNotification[]) => void
+): () => void {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.emailVerified) {
+    return () => {};
+  }
+
+  const q = query(
+    collection(db, 'notifications'),
+    where('isBroadcast', '==', true)
+  );
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items: FirestoreBroadcastNotification[] = [];
+      snapshot.forEach((docSnap) => {
+        const d = docSnap.data();
+        const ts =
+          d.createdAt && typeof d.createdAt.toDate === 'function'
+            ? d.createdAt.toDate().toISOString()
+            : new Date().toISOString();
+        if (typeof d.title === 'string' && typeof d.message === 'string') {
+          items.push({
+            id: docSnap.id,
+            title: d.title,
+            message: d.message,
+            priority:
+              d.priority === 'urgent' || d.priority === 'important'
+                ? d.priority
+                : 'info',
+            createdAt: ts,
+          });
+        }
+      });
+      callback(items);
+    },
+    (err) => {
+      console.warn('Firestore notifications listener note:', err.message);
+    }
+  );
+}
+
+

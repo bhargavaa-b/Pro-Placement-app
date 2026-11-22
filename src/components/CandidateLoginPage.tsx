@@ -9,6 +9,7 @@ import {
   Trash2,
   Flame,
   Code2,
+  ArrowLeft,
 } from 'lucide-react';
 import { UserProfile } from '../types';
 import { ProPlacementAppLogo } from './ProPlacementAppLogo';
@@ -32,9 +33,17 @@ import {
 } from '../lib/supabase';
 import { LegalModalType } from './LegalModals';
 
+export interface WelcomeEmailStatus {
+  sent: boolean;
+  configured: boolean;
+  recipient: string;
+  message: string;
+}
+
 interface CandidateLoginPageProps {
-  onLoginSuccess: (user: UserProfile) => void;
+  onLoginSuccess: (user: UserProfile, welcomeEmail?: WelcomeEmailStatus | null) => void;
   onOpenLegalModal?: (modal: LegalModalType) => void;
+  onBackToAbout?: () => void;
 }
 
 const GRADUATION_YEARS = [
@@ -58,6 +67,7 @@ const GRADUATION_YEARS = [
 export const CandidateLoginPage: React.FC<CandidateLoginPageProps> = ({
   onLoginSuccess,
   onOpenLegalModal,
+  onBackToAbout,
 }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -72,7 +82,10 @@ export const CandidateLoginPage: React.FC<CandidateLoginPageProps> = ({
     setSavedProfiles(loadAllSavedProfiles());
   }, []);
 
-  const finalizeCandidateSession = async (baseProfile: UserProfile) => {
+  const finalizeCandidateSession = async (
+    baseProfile: UserProfile,
+    welcomeEmail?: WelcomeEmailStatus | null
+  ) => {
     const todayStr = new Date().toISOString().split('T')[0];
     let mergedProfile: UserProfile = {
       ...baseProfile,
@@ -180,7 +193,7 @@ export const CandidateLoginPage: React.FC<CandidateLoginPageProps> = ({
       // Non-blocking
     }
 
-    onLoginSuccess(mergedProfile);
+    onLoginSuccess(mergedProfile, welcomeEmail);
   };
 
   const handleQuickProfileSelect = async (profile: UserProfile) => {
@@ -195,6 +208,7 @@ export const CandidateLoginPage: React.FC<CandidateLoginPageProps> = ({
           email: profile.email,
           university: profile.university,
           graduationYear: profile.graduationYear,
+          sendWelcomeEmail: false,
         }),
       });
       const data = await res.json();
@@ -270,7 +284,8 @@ export const CandidateLoginPage: React.FC<CandidateLoginPageProps> = ({
       setErrorMsg('Please enter your full name.');
       return;
     }
-    if (!safeEmail || !safeEmail.includes('@')) {
+    const emailPattern = /^[^\s@<>()[\]\\,;:\s"]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/;
+    if (!safeEmail || !emailPattern.test(safeEmail)) {
       setErrorMsg('Please enter a valid email ID.');
       return;
     }
@@ -327,10 +342,16 @@ export const CandidateLoginPage: React.FC<CandidateLoginPageProps> = ({
           email: safeEmail,
           university: safeUni,
           graduationYear: safeGradYear,
+          sendWelcomeEmail: true,
         }),
       });
 
       const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data?.error || 'Unable to sign in with these details.');
+        setIsLoading(false);
+        return;
+      }
       if (data?.sessionToken) {
         try {
           sessionStorage.setItem('pp_session_token', data.sessionToken);
@@ -351,9 +372,9 @@ export const CandidateLoginPage: React.FC<CandidateLoginPageProps> = ({
             }
           : baseProfile;
 
-      await finalizeCandidateSession(candidateUser);
+      await finalizeCandidateSession(candidateUser, data?.welcomeEmail || null);
     } catch {
-      await finalizeCandidateSession(baseProfile);
+      await finalizeCandidateSession(baseProfile, null);
     } finally {
       setIsLoading(false);
     }
@@ -373,13 +394,23 @@ export const CandidateLoginPage: React.FC<CandidateLoginPageProps> = ({
       </div>
 
       {/* Top Brand Header */}
-      <header className="relative z-10 max-w-4xl w-full mx-auto flex items-center justify-between py-3 border-b border-slate-200/80">
+      <header className="relative z-10 max-w-4xl w-full mx-auto flex items-center justify-between gap-4 py-3 border-b border-slate-200/80">
         <div className="flex items-center gap-3">
+          {onBackToAbout && (
+            <button
+              type="button"
+              onClick={onBackToAbout}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-50 border border-slate-200 text-xs font-medium text-slate-700 hover:text-[#0B2545] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>About</span>
+            </button>
+          )}
           <ProPlacementAppLogo size="sm" showTextBeside />
         </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+        <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 font-medium">
           <Users className="w-3.5 h-3.5 text-[#0B2545]" />
-          <span>Multi-User Cloud Platform · 3LLION Ventures</span>
+          <span>Multi-User Cloud Platform · 3LLION</span>
         </div>
       </header>
 

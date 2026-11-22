@@ -16,10 +16,13 @@ import {
   ArrowLeft,
   Bell,
   BellRing,
+  MailCheck,
+  Megaphone,
 } from 'lucide-react';
 import { UserProfile } from './types';
 import { ProfileManager } from './components/ProfileManager';
 import { CandidateLoginPage } from './components/CandidateLoginPage';
+import { AboutProPlacementPage } from './components/AboutProPlacementPage';
 import { ContentsList, BlackRedMicIcon } from './components/ContentsList';
 import { DsaHub } from './components/DsaHub';
 import { AptitudeArena } from './components/AptitudeArena';
@@ -28,7 +31,11 @@ import { CurriculumRoadmap } from './components/CurriculumRoadmap';
 import { ByteRunnerGame } from './components/ByteRunnerGame';
 import { AtsResumeBuilder } from './components/AtsResumeBuilder';
 import { InterviewHub } from './components/InterviewHub';
-import { StreakNotificationModal } from './components/StreakNotificationModal';
+import {
+  NotificationsWindowModal,
+  AppBroadcastNotification,
+} from './components/NotificationsWindowModal';
+import { ProPlacementChatbot } from './components/ProPlacementChatbot';
 import { StreakUrgencyBanner } from './components/StreakUrgencyBanner';
 import { streakNotificationService } from './services/streakNotificationService';
 import {
@@ -50,6 +57,7 @@ import {
   recordSolvedProblemInFirestore,
   loadCandidateFromFirestore,
   subscribeCandidateFromFirestore,
+  subscribeAdminNotificationsFromFirestore,
 } from './lib/firebase';
 import {
   syncCandidateToSupabase,
@@ -215,6 +223,7 @@ export default function App() {
     }
     return true;
   });
+  const [showAboutPage, setShowAboutPage] = useState(true);
   const [activeTab, setActiveTab] = useState<NavTab>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -237,7 +246,17 @@ export default function App() {
     return 'contents';
   });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [showStreakModal, setShowStreakModal] = useState(false);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [notificationsInitialView, setNotificationsInitialView] = useState<
+    'inbox' | 'admin' | 'streak'
+  >('inbox');
+  const [broadcastNotifications, setBroadcastNotifications] = useState<
+    AppBroadcastNotification[]
+  >([]);
+  const [lastReadNotifMs, setLastReadNotifMs] = useState<number>(0);
+  const [liveNotifToast, setLiveNotifToast] =
+    useState<AppBroadcastNotification | null>(null);
+  const [welcomeEmailNotice, setWelcomeEmailNotice] = useState<string | null>(null);
   const [tabHistory, setTabHistory] = useState<NavTab[]>(() => {
     return activeTab !== 'contents' ? ['contents', activeTab] : ['contents'];
   });
@@ -483,6 +502,139 @@ export default function App() {
     return () => cleanup();
   }, [currentProfile?.streakDays]);
 
+  // Load persisted unread cutoff for candidate
+  useEffect(() => {
+    const emailKey = (currentProfile?.email || 'guest').trim().toLowerCase();
+    try {
+      const saved = localStorage.getItem(`pp_notif_read_ms_${emailKey}`);
+      setLastReadNotifMs(saved ? Number(saved) || 0 : 0);
+    } catch {
+      setLastReadNotifMs(0);
+    }
+  }, [currentProfile?.email]);
+
+  const mergeNotificationList = useCallback(
+    (incoming: AppBroadcastNotification[]) => {
+      setBroadcastNotifications((prev) => {
+        const map = new Map<string, AppBroadcastNotification>();
+        for (const item of prev) {
+          if (item?.id) map.set(item.id, item);
+        }
+        for (const item of incoming) {
+          if (item?.id) map.set(item.id, item);
+        }
+        return Array.from(map.values())
+          .sort(
+            (a, b) =>
+              (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+          )
+          .slice(0, 200);
+      });
+    },
+    []
+  );
+
+  // Real-time Admin Broadcast Notification subscription (SSE + REST + Firestore mirror)
+  useEffect(() => {
+    if (!currentProfile) return;
+
+    fetch('/api/notifications')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.notifications && Array.isArray(data.notifications)) {
+          mergeNotificationList(data.notifications);
+        }
+      })
+      .catch(() => {});
+
+    let evtSource: EventSource | null = null;
+    try {
+      evtSource = new EventSource('/api/notifications/stream');
+      evtSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (
+            payload?.type === 'init' &&
+            Array.isArray(payload.notifications)
+          ) {
+            mergeNotificationList(payload.notifications);
+          } else if (
+            payload?.type === 'broadcast' &&
+            payload.notification?.id
+          ) {
+            const incoming: AppBroadcastNotification = payload.notification;
+            mergeNotificationList([incoming]);
+            setLiveNotifToast(incoming);
+            setTimeout(() => {
+              setLiveNotifToast((curr) =>
+                curr?.id === incoming.id ? null : curr
+              );
+            }, 6500);
+
+            if (
+              typeof window !== 'undefined' &&
+              'Notification' in window &&
+              Notification.permission === 'granted'
+            ) {
+              try {
+                new Notification(incoming.title, {
+                  body: incoming.message,
+                });
+              } catch {
+                // Ignore Notification errors on restricted contexts
+              }
+            }
+          } else if (payload?.type === 'delete' && typeof payload.id === 'string') {
+            setBroadcastNotifications((prev) =>
+              prev.filter((n) => n.id !== payload.id)
+            );
+          }
+        } catch {
+          // Ignore malformed SSE frame
+        }
+      };
+    } catch {
+      // Non-blocking
+    }
+
+    let unsubFsNotifs: (() => void) | undefined;
+    try {
+      unsubFsNotifs = subscribeAdminNotificationsFromFirestore((fsItems) => {
+        const mapped: AppBroadcastNotification[] = fsItems.map((it) => ({
+          id: it.id,
+          title: it.title,
+          message: it.message,
+          priority: it.priority,
+          senderName: 'Admin · Pro Placement',
+          createdAt: it.createdAt,
+        }));
+        mergeNotificationList(mapped);
+      });
+    } catch {
+      // Non-blocking
+    }
+
+    return () => {
+      if (evtSource) evtSource.close();
+      if (unsubFsNotifs) unsubFsNotifs();
+    };
+  }, [currentProfile?.email, mergeNotificationList]);
+
+  const markAllNotificationsRead = useCallback(() => {
+    const now = Date.now();
+    setLastReadNotifMs(now);
+    const emailKey = (currentProfile?.email || 'guest').trim().toLowerCase();
+    try {
+      localStorage.setItem(`pp_notif_read_ms_${emailKey}`, String(now));
+    } catch {
+      // Ignore
+    }
+  }, [currentProfile?.email]);
+
+  const unreadNotifCount = broadcastNotifications.filter(
+    (n) => (Date.parse(n.createdAt) || 0) > lastReadNotifMs
+  ).length;
+
   const updateProfile = useCallback((updated: UserProfile) => {
     const normalized = normalizeDailyStreak(updated);
     const cleanProfile: UserProfile = {
@@ -580,7 +732,11 @@ export default function App() {
       }
     }
 
-    // 2. Check legal modal
+    // 2. Check notifications modal & legal modal
+    if (showNotificationsModal) {
+      setShowNotificationsModal(false);
+      return;
+    }
     if (legalModal) {
       setLegalModal(null);
       return;
@@ -925,18 +1081,55 @@ export default function App() {
     );
   }
 
-  // 2. If candidate is not signed in, show login screen
+  // 2. If candidate is not signed in, show About Pro Placement page first, then Login screen
   if (!currentProfile) {
+    if (showAboutPage) {
+      return (
+        <div className="min-h-screen bg-[#FCFCFD] text-[#18181B] flex flex-col font-sans selection:bg-[#D4AF37] selection:text-white">
+          <AboutProPlacementPage
+            onOpenLegalModal={(modal) => setLegalModal(modal)}
+            onProceedToLogin={() => {
+              setShowAboutPage(false);
+              try {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              } catch {
+                // Ignore
+              }
+            }}
+          />
+          <LegalModals
+            activeModal={legalModal}
+            onClose={() => setLegalModal(null)}
+          />
+          <CookieConsentBanner />
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-[#FCFCFD] text-[#18181B] flex flex-col font-sans selection:bg-[#D4AF37] selection:text-white">
         <CandidateLoginPage
+          onBackToAbout={() => {
+            setShowAboutPage(true);
+            try {
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            } catch {
+              // Ignore
+            }
+          }}
           onOpenLegalModal={(modal) => setLegalModal(modal)}
-          onLoginSuccess={(user) => {
+          onLoginSuccess={(user, welcomeEmail) => {
             const normalized = normalizeDailyStreak(user);
             const finalUser = { ...user, ...normalized };
             saveSecureProfile(finalUser);
             setCurrentProfile(finalUser);
             setActiveTab('contents');
+            if (welcomeEmail?.sent && welcomeEmail.recipient) {
+              setWelcomeEmailNotice(
+                `Welcome greeting sent to ${welcomeEmail.recipient}`
+              );
+              setTimeout(() => setWelcomeEmailNotice(null), 5500);
+            }
           }}
         />
         <LegalModals
@@ -1142,7 +1335,10 @@ export default function App() {
             {/* Daily Streak Indicator in Glassy Pink with Phone Alert Modal */}
             <button
               type="button"
-              onClick={() => setShowStreakModal(true)}
+              onClick={() => {
+                setNotificationsInitialView('streak');
+                setShowNotificationsModal(true);
+              }}
               title="Click to view Streak & configure Phone Retention Notifications"
               className="relative overflow-hidden flex items-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-b from-[#FFF0F5] via-[#FCE7F3] to-[#FBCFE8] hover:from-[#FCE7F3] hover:to-[#F472B6]/30 border border-pink-300 rounded-xl text-xs select-none shadow-[0_2px_8px_rgba(244,114,182,0.2),inset_0_1px_1px_rgba(255,255,255,0.95)] before:absolute before:inset-x-0 before:top-0 before:h-[45%] before:bg-gradient-to-b before:from-white/80 before:to-transparent before:pointer-events-none transition cursor-pointer"
             >
@@ -1155,14 +1351,28 @@ export default function App() {
               )}
             </button>
 
-            {/* Dedicated Phone Streak Retention Notification Bell Button */}
+            {/* Notifications & Admin Broadcast Bell Button */}
             <button
               type="button"
-              onClick={() => setShowStreakModal(true)}
-              title="Phone Streak Retention Notification Settings"
+              onClick={() => {
+                setNotificationsInitialView('inbox');
+                setShowNotificationsModal(true);
+                markAllNotificationsRead();
+              }}
+              aria-label="Open Notifications Window"
+              title="Notifications, Admin Announcements & Streak Alerts"
               className="relative flex items-center justify-center p-2 rounded-xl bg-gradient-to-b from-pink-50 to-pink-100/70 hover:from-pink-100 hover:to-pink-200 text-pink-700 border border-pink-200 transition cursor-pointer shadow-2xs"
             >
-              <Bell className="w-3.5 h-3.5" />
+              {unreadNotifCount > 0 ? (
+                <BellRing className="w-3.5 h-3.5 animate-pulse text-rose-600" />
+              ) : (
+                <Bell className="w-3.5 h-3.5" />
+              )}
+              {unreadNotifCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-extrabold font-mono flex items-center justify-center shadow-sm border border-white">
+                  {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+                </span>
+              )}
             </button>
 
             {/* Candidate Profile Button */}
@@ -1247,7 +1457,10 @@ export default function App() {
       <StreakUrgencyBanner
         streakDays={currentProfile.streakDays}
         streakShieldActive={currentProfile.streakShieldActive}
-        onOpenNotificationModal={() => setShowStreakModal(true)}
+        onOpenNotificationModal={() => {
+          setNotificationsInitialView('streak');
+          setShowNotificationsModal(true);
+        }}
         onPracticeClick={() => handleTabChange('dsa')}
       />
 
@@ -1257,7 +1470,10 @@ export default function App() {
           <ContentsList
             currentProfile={currentProfile}
             onSelectTab={(tab: NavTab) => handleTabChange(tab)}
-            onOpenStreakModal={() => setShowStreakModal(true)}
+            onOpenStreakModal={() => {
+              setNotificationsInitialView('streak');
+              setShowNotificationsModal(true);
+            }}
           />
         )}
 
@@ -1413,18 +1629,89 @@ export default function App() {
         </div>
       )}
 
+      {/* Live Admin Broadcast Toast Alert */}
+      {liveNotifToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed top-20 right-4 sm:right-6 z-50 max-w-sm bg-white border border-amber-300 rounded-2xl shadow-2xl p-3.5 flex items-start gap-3 animate-in fade-in slide-in-from-top-3 duration-200"
+        >
+          <div className="w-9 h-9 rounded-xl bg-[#0B2545] text-[#D4AF37] flex items-center justify-center shrink-0">
+            <Megaphone className="w-4 h-4" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
+              New Admin Announcement
+            </div>
+            <div className="text-xs font-bold text-slate-900 truncate mt-0.5">
+              {liveNotifToast.title}
+            </div>
+            <p className="text-[11px] text-slate-600 line-clamp-2 mt-0.5">
+              {liveNotifToast.message}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setLiveNotifToast(null);
+                setNotificationsInitialView('inbox');
+                setShowNotificationsModal(true);
+                markAllNotificationsRead();
+              }}
+              className="mt-1.5 text-[11px] font-bold text-[#0B2545] hover:underline cursor-pointer"
+            >
+              Open Notification Window &rarr;
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLiveNotifToast(null)}
+            className="text-slate-400 hover:text-slate-700 p-0.5 cursor-pointer"
+            aria-label="Dismiss notification toast"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Welcome Email Sent Confirmation */}
+      {welcomeEmailNotice && !showExitToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-7 left-4 sm:left-6 z-40 px-4 py-2.5 bg-[#0B2545] text-white text-xs font-semibold rounded-xl shadow-2xl border border-[#D4AF37]/50 flex items-center gap-2.5"
+        >
+          <MailCheck className="w-4 h-4 text-[#D4AF37] shrink-0" />
+          <span>{welcomeEmailNotice}</span>
+        </div>
+      )}
+
       <LegalModals
         activeModal={legalModal}
         onClose={() => setLegalModal(null)}
         activeEmail={currentProfile.email}
         onAccountDeleted={handleLogout}
       />
-      <StreakNotificationModal
-        isOpen={showStreakModal}
-        onClose={() => setShowStreakModal(false)}
+      <NotificationsWindowModal
+        isOpen={showNotificationsModal}
+        initialView={notificationsInitialView}
+        onClose={() => setShowNotificationsModal(false)}
+        notifications={broadcastNotifications}
+        lastReadAtMs={lastReadNotifMs}
+        unreadCount={unreadNotifCount}
+        onMarkAllRead={markAllNotificationsRead}
+        onNotificationPublished={(notif) => mergeNotificationList([notif])}
+        onNotificationDeleted={(id) =>
+          setBroadcastNotifications((prev) => prev.filter((n) => n.id !== id))
+        }
+        userEmail={currentProfile.email}
+        userName={currentProfile.name}
         streakDays={currentProfile.streakDays}
         streakShieldActive={currentProfile.streakShieldActive}
-        onNavigateToPractice={(tab) => handleTabChange(tab as NavTab)}
+        onNavigateToTab={(tab) => handleTabChange(tab as NavTab)}
+      />
+      <ProPlacementChatbot
+        userName={currentProfile.name}
+        activeTab={activeTab}
       />
       <CookieConsentBanner />
     </div>
